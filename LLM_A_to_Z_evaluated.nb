@@ -27,6 +27,10 @@ A single-notebook walkthrough of the full pipeline, from byte-pair encoding \
 to chat\
 \>", "Subtitle",ExpressionUUID->"c7dbe963-5f5f-4c08-8a8f-7084270aa83c"],
 
+Cell["Companion repository \[Dash] all source, data and the trained chat model: https://github.com/mthiel74/LLM-A-to-Z-in-Wolfram . The code cells load one package, LLMAtoZ.wl, which is fetched automatically from GitHub if it is not sitting next to the notebook. To run and modify everything yourself, clone the repo and open this notebook from inside it \[Dash] every file path is then relative to the notebook's folder. Just reading? Every figure and output is already saved in the notebook.", "Text",
+ FontWeight->"Bold",
+ CellTags->"REPO-LINK"],
+
 Cell["\<\
 This notebook is a complete, self-contained tour of how to build a small but \
 functional transformer-based language model entirely in Wolfram Language.  It \
@@ -170,12 +174,7 @@ Cell[TextData[{
  "variable is required."
 }], "Text",ExpressionUUID->"d7d7a352-3782-4831-8059-965051529686"],
 
-Cell["SetDirectory[NotebookDirectory[]]", "Input",ExpressionUUID->"6d4fac5f-869e-41c5-906f-102de49d0b97"],
-
-Cell["(* evaluation failed at build time *)", "Output",
- FontSlant->Italic,
- FontColor->GrayLevel[
-  0.5],ExpressionUUID->"2c073c69-ec32-4ced-a59d-0f940b54f5d0"],
+Cell["If[StringQ[Quiet@NotebookDirectory[]], SetDirectory[NotebookDirectory[]]];  (* anchor relative paths (corpus, data) to this notebook's folder *)", "Input",ExpressionUUID->"6d4fac5f-869e-41c5-906f-102de49d0b97"],
 
 Cell[TextData[{
  "All of the auxiliary functions used across the notebook live in a ",
@@ -203,7 +202,7 @@ Cell[TextData[{
  " to regenerate."
 }], "Text",ExpressionUUID->"d7c3be01-42da-4f43-a275-56168faebe3a"],
 
-Cell["Get[\"LLMAtoZ.wl\"]", "Input",ExpressionUUID->"8515a495-4299-4212-8deb-5afd24fa5452"],
+Cell["Module[{local = Quiet@Check[FileNameJoin[{NotebookDirectory[], \"LLMAtoZ.wl\"}], $Failed]},\n  Get[If[StringQ[local] && FileExistsQ[local], local,\n    \"https://raw.githubusercontent.com/mthiel74/LLM-A-to-Z-in-Wolfram/main/LLMAtoZ.wl\"]]]", "Input",ExpressionUUID->"8515a495-4299-4212-8deb-5afd24fa5452"],
 
 Cell[TextData[{
  "Load the corpus.  Tiny Shakespeare is a 1.1-megabyte concatenation ",
