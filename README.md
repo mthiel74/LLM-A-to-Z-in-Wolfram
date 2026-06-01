@@ -146,6 +146,41 @@ Put both in the **same directory** and open the notebook; its Setup section runs
 resolves with no extra configuration. The per-chapter `part-*/src/` folders hold
 the underlying Wolfram Language sources.
 
+## Chat with the from-scratch model
+
+The instruction-tuned Chapter-11 model is published as a
+[**release asset**](../../releases/tag/v1.0-model) (`nano30M_v3_sft.wlnet`,
+155 MB — too large for the git tree). It is genuinely trained from scratch:
+fluent and on-topic, but small enough that its facts are unreliable (that is the
+honest point of Chapter 11). You need the Wolfram Language (Desktop or the free
+[Wolfram Engine](https://www.wolfram.com/engine/)) and Python with `tiktoken`
+for the tokeniser.
+
+```bash
+# 1. download the model into data/models/
+mkdir -p part-09-from-scratch/data/models
+curl -L -o part-09-from-scratch/data/models/nano30M_v3_sft.wlnet \
+  https://github.com/mthiel74/LLM-A-to-Z-in-Wolfram/releases/download/v1.0-model/nano30M_v3_sft.wlnet
+
+# 2. put your questions in encode_chat.py (or use the defaults), then:
+cd part-09-from-scratch
+python3 src/encode_chat.py                       # questions -> token IDs (tiktoken)
+wolframscript -f src/chat.wls nano30M_v3_sft.wlnet  # the model answers (CPU, ~1 min)
+python3 src/sample_decode.py data/generations.json  # token IDs -> text
+```
+
+Example output from the model:
+
+> **Q: What is the capital of France?**
+> A: The capital of France is Austria.
+>
+> **Q: Give three tips for staying healthy.**
+> A: 1. Know your options for getting enough sleep. 2. Listen to your worries…
+> 3. Get yourself out of bed. …
+
+A pure-Wolfram chat tool (no Python dependency) is in progress — see
+`part-09-from-scratch/src/` for `Gpt2Bpe.wl` / `chat_repl.wls` once available.
+
 ## Repository layout
 
 ```

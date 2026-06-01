@@ -10,11 +10,17 @@
    Questions come from data/questions.json {questions:[str]} (encoded to ids by
    encode_chat.py).  Greedy-ish top-k sampling. *)
 
-repo = FileNameJoin[{$HomeDirectory, "GitHub", "LLM-A-to-Z-in-WL"}];
-(* optional CLI arg: model filename under data/models (default = v2 SFT) *)
-modelName = First[$ScriptCommandLine[[2 ;;]], "nano30M_sft.wlnet"];
-modelPath = FileNameJoin[{repo, "part-09-from-scratch", "data", "models", modelName}];
-qFile = FileNameJoin[{repo, "part-09-from-scratch", "data", "questions_encoded.json"}];
+(* Resolve paths relative to THIS script (src/), so it runs from any checkout.
+   src/ -> part-09-from-scratch/ -> data/  *)
+part9 = ParentDirectory[DirectoryName[$InputFileName]];
+(* optional CLI arg: model filename under data/models (default = v3 SFT) *)
+modelName = First[$ScriptCommandLine[[2 ;;]], "nano30M_v3_sft.wlnet"];
+modelPath = FileNameJoin[{part9, "data", "models", modelName}];
+qFile = FileNameJoin[{part9, "data", "questions_encoded.json"}];
+If[! FileExistsQ[modelPath],
+  Print["Model not found: ", modelPath];
+  Print["Download nano30M_v3_sft.wlnet from the repo's Releases page and place it in part-09-from-scratch/data/models/."];
+  Quit[1]];
 
 net = Import[modelPath, "WLNet"];
 maxLen = NetExtract[net, "Input"][[1]];
@@ -51,6 +57,6 @@ Do[
   ],
   {q, Length[questions]}];
 
-Export[FileNameJoin[{repo, "part-09-from-scratch", "data", "generations.json"}],
+Export[FileNameJoin[{part9, "data", "generations.json"}],
   <|"prompts" -> questions, "generations" -> answers|>, "JSON"];
 Print["wrote ", Length[answers], " answers"];
