@@ -152,34 +152,40 @@ The instruction-tuned Chapter-11 model is published as a
 [**release asset**](../../releases/tag/v1.0-model) (`nano30M_v3_sft.wlnet`,
 155 MB — too large for the git tree). It is genuinely trained from scratch:
 fluent and on-topic, but small enough that its facts are unreliable (that is the
-honest point of Chapter 11). You need the Wolfram Language (Desktop or the free
-[Wolfram Engine](https://www.wolfram.com/engine/)) and Python with `tiktoken`
-for the tokeniser.
+honest point of Chapter 11). You need the Wolfram Language — Desktop or the free
+[Wolfram Engine](https://www.wolfram.com/engine/).
+
+First, download the model into `data/models/`:
 
 ```bash
-# 1. download the model into data/models/
 mkdir -p part-09-from-scratch/data/models
 curl -L -o part-09-from-scratch/data/models/nano30M_v3_sft.wlnet \
   https://github.com/mthiel74/LLM-A-to-Z-in-Wolfram/releases/download/v1.0-model/nano30M_v3_sft.wlnet
+```
 
-# 2. put your questions in encode_chat.py (or use the defaults), then:
+**Pure Wolfram, no other dependencies** — `Gpt2Bpe.wl` reimplements GPT-2's
+byte-level BPE tokeniser natively (verified token-for-token against `tiktoken`),
+so `chat_repl.wls` needs nothing but the Wolfram Language:
+
+```bash
 cd part-09-from-scratch
-python3 src/encode_chat.py                       # questions -> token IDs (tiktoken)
-wolframscript -f src/chat.wls nano30M_v3_sft.wlnet  # the model answers (CPU, ~1 min)
-python3 src/sample_decode.py data/generations.json  # token IDs -> text
+# one question:
+wolframscript -f src/chat_repl.wls nano30M_v3_sft.wlnet "What is the capital of France?"
+# or an interactive prompt (type questions, blank line to quit):
+wolframscript -f src/chat_repl.wls
 ```
 
 Example output from the model:
 
 > **Q: What is the capital of France?**
-> A: The capital of France is Austria.
->
-> **Q: Give three tips for staying healthy.**
-> A: 1. Know your options for getting enough sleep. 2. Listen to your worries…
-> 3. Get yourself out of bed. …
+> A: France is the second largest country in the world, with the US and Russia
+> having the highest GDP.
 
-A pure-Wolfram chat tool (no Python dependency) is in progress — see
-`part-09-from-scratch/src/` for `Gpt2Bpe.wl` / `chat_repl.wls` once available.
+Fluent, confidently structured, and wrong — exactly what a 30M model trained on
+a tutorial budget produces, and exactly the point Chapter 11 is honest about.
+
+A Python variant (`src/chat.wls` + `encode_chat.py`/`sample_decode.py`, using
+`tiktoken` for the tokeniser) is also included if you prefer it.
 
 ## Repository layout
 
