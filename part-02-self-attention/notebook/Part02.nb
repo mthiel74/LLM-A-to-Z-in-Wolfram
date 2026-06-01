@@ -1,0 +1,970 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[     41315,        961]
+NotebookOptionsPosition[     35086,        884]
+NotebookOutlinePosition[     35443,        900]
+CellTagsIndexPosition[     35400,        897]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell["\<\
+Build a Large Language Model from Scratch \[LongDash] in Wolfram Language\
+\>", "Title",ExpressionUUID->"7a789b1a-3393-4b38-8e9d-4f58df747409"],
+
+Cell["Part 2: Self-attention and the QKV picture", "Subtitle",ExpressionUUID->"235e31e6-9595-427f-a55e-0d02e230928a"],
+
+Cell[TextData[{
+ "Part 1 built a tokeniser and an embedder; we ended with a ",
+ StyleBox["NetGraph",
+  FontFamily->"Courier"],
+ " that turns a sequence of BPE token IDs into a (seqLen, ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"7cbda979-7479-45ec-b27c-032b9a4948d1"],
+ ") input tensor.  In Part 2 we feed that tensor into ",
+ "the mechanism the transformer is actually named for: scaled ",
+ "dot-product attention, derived from first principles."
+}], "Text",ExpressionUUID->"5fc63b49-1f16-4488-8664-02e531d7bd3a"],
+
+Cell["The two pieces of work for this post:", "Text",ExpressionUUID->"738e68e7-fa94-453b-961d-afb6c2e390e3"],
+
+Cell[TextData[{
+ "\[FilledCircle] Derive ",
+ Cell[BoxData[
+  RowBox[{"softmax", "(", 
+   FractionBox[
+    RowBox[{"Q", "\[CenterDot]", 
+     SuperscriptBox["K", "\[Transpose]"]}], 
+    SqrtBox[
+     SubscriptBox["d", "k"]]], ")", "\[CenterDot]", "V"}]], "Text",
+  FontSize->14,ExpressionUUID->"8df28144-d11c-406e-9727-73e252a805e6"],
+ " step by step, including the ",
+ Cell[BoxData[
+  FractionBox["1", 
+   SqrtBox[
+    SubscriptBox["d", "k"]]]], "Text",
+  FontSize->14,ExpressionUUID->"d89d0d29-01e1-4c51-9028-bb29a6d6f860"],
+ " factor that keeps the pre-softmax logits at unit ",
+ "variance.  Most expositions assert this scaling; we will show ",
+ "where it comes from with an empirical histogram you can ",
+ "reproduce.\n",
+ "\[FilledCircle] Build a single-head and a multi-head causal ",
+ "attention block as inspectable ",
+ StyleBox["NetGraph",
+  FontFamily->"Courier"],
+ "s, then load a pretrained GPT-2 small and visualise its real, ",
+ "learned attention heatmaps \[LongDash] before we train our own ",
+ "from scratch in Part 4."
+}], "Text",ExpressionUUID->"3c2b8514-19ca-461a-bdbc-71d99eb283b7"],
+
+Cell[BoxData[
+ RowBox[{"Import", "[", "\"\<figures/illustration_attention_hero.png\>\"", 
+  "]"}]], "Input",ExpressionUUID->"f89f7d3d-7686-4a20-8f7e-c1954f7c34dc"],
+
+Cell["1.  Setup", "Section",ExpressionUUID->"8db1b229-6094-425c-b451-c2e5bb46e376"],
+
+Cell["The attention package and the cached pretrained GPT-2 net.", "Text",ExpressionUUID->"7f4aacdc-596a-4256-b2c5-98b2bef5e1d6"],
+
+Cell["SetDirectory[NotebookDirectory[]]", "Input",ExpressionUUID->"30efebee-67ec-4ad4-af4b-ce57c7ad928e"],
+
+Cell["Get[\"src/Attention.wl\"]", "Input",ExpressionUUID->"dfd45199-4381-44bf-9594-854deafd6fd8"],
+
+Cell[TextData[{
+ "GPT-2 small is downloaded via WL's ",
+ StyleBox["NetModel",
+  FontFamily->"Courier"],
+ ".  First-time access pulls about 500 MB of weights and caches them; ",
+ "subsequent loads are local-file fast.  We save a copy to the part's ",
+ StyleBox["data/",
+  FontFamily->"Courier"],
+ " directory so the rest of the notebook does not depend on a network ",
+ "connection."
+}], "Text",ExpressionUUID->"5383ffa2-8557-4f38-92fd-48ae29b68c77"],
+
+Cell["\<\
+gpt = NetModel[\"GPT-2 Transformer Trained on WebText Data\",
+                \"Task\" -> \"LanguageModeling\"];\
+\>", "Input",ExpressionUUID->"7da63834-1908-4c09-81c3-9bc62e04ff2c"],
+
+Cell["2.  Attention is a learnable weighted sum", "Section",ExpressionUUID->"482edf32-1b30-4d80-8505-ccac88fe75ef"],
+
+Cell[TextData[{
+ "Strip everything fancy away. Attention is the operation \
+\[OpenCurlyDoubleQuote]each output token is a weighted sum of the input \
+tokens, where the weights are learned from the input itself.\
+\[CloseCurlyDoubleQuote] ",
+ "Suppose we have a 4-token sequence ",
+ Cell[BoxData[
+  RowBox[{
+   SubscriptBox["x", "1"], ",", 
+   SubscriptBox["x", "2"], ",", 
+   SubscriptBox["x", "3"], ",", 
+   SubscriptBox["x", "4"]}]], "Text",
+  FontSize->14,ExpressionUUID->"84e3314f-04be-4985-ac33-1f9f4297c391"],
+ " each in ",
+ Cell[BoxData[
+  SuperscriptBox["\[DoubleStruckCapitalR]", "d"]], "Text",
+  FontSize->14,ExpressionUUID->"e089334c-8003-4e10-8bcc-ba0d454214af"],
+ ".  For token 3, a weighted sum is just ",
+ Cell[BoxData[
+  RowBox[{
+   SubscriptBox["y", "3"], "=", 
+   SubscriptBox["a", "31"], 
+   SubscriptBox["x", "1"], "+", 
+   SubscriptBox["a", "32"], 
+   SubscriptBox["x", "2"], "+", 
+   SubscriptBox["a", "33"], 
+   SubscriptBox["x", "3"]}]], "Text",
+  FontSize->14,ExpressionUUID->"d6f10f5a-b957-49c0-ad11-7bd812ab7ae9"],
+ " with the ",
+ Cell[BoxData[
+  SubscriptBox["a", 
+   RowBox[{"3", "j"}]]], "Text",
+  FontSize->14,ExpressionUUID->"9c9f00d8-5383-442d-8873-7d54f1952aff"],
+ " summing to 1 (causal masking forbids attending to ",
+ Cell[BoxData[
+  SubscriptBox["x", "4"]], "Text",
+  FontSize->14,ExpressionUUID->"416d0468-e3d2-490a-9467-0f50f7eee845"],
+ ").  All attention does is decide those ",
+ "weights from the content of the tokens themselves rather than hand-coding \
+them."
+}], "Text",ExpressionUUID->"3f830671-fe6f-4ebc-a9e9-348038920e4b"],
+
+Cell[TextData[{
+ "The three-line learnable version: turn each ",
+ Cell[BoxData[
+  SubscriptBox["x", "i"]], "Text",
+  FontSize->14,ExpressionUUID->"e46d3fc6-2ab0-42bb-803f-05a0996f6c0a"],
+ " into a query ",
+ Cell[BoxData[
+  SubscriptBox["q", "i"]], "Text",
+  FontSize->14,ExpressionUUID->"055d8ed5-cbd9-4783-8bf5-901360e047c1"],
+ ", a key ",
+ Cell[BoxData[
+  SubscriptBox["k", "i"]], "Text",
+  FontSize->14,ExpressionUUID->"db6ab33f-f5e6-4042-8f56-f5f35fb395c0"],
+ ", and a value ",
+ Cell[BoxData[
+  SubscriptBox["v", "i"]], "Text",
+  FontSize->14,ExpressionUUID->"f8da77d0-ba85-4227-bae3-3b77b770325a"],
+ " via three learned linear maps. The compatibility of token i with ",
+ "token j is the dot product ",
+ Cell[BoxData[
+  RowBox[{
+   SubscriptBox["s", 
+    RowBox[{"i", "j"}]], "=", 
+   SubscriptBox["q", "i"], "\[CenterDot]", 
+   SubscriptBox["k", "j"]}]], "Text",
+  FontSize->14,ExpressionUUID->"3916908e-20d1-499a-aa71-50f7c08bfcc0"],
+ ". A softmax across j gives the attention weights; their weighted sum ",
+ "of the values is the output of token i."
+}], "Text",ExpressionUUID->"87b5a088-e46f-4d60-b0f2-6c5f30b673cd"],
+
+Cell[TextData[{
+ "An intuition that differs from the usual exposition: the ",
+ StyleBox["query",
+  FontSlant->Italic],
+ " is the question a token asks of the others; the ",
+ StyleBox["key",
+  FontSlant->Italic],
+ " is the answer it provides to such queries; the ",
+ StyleBox["value",
+  FontSlant->Italic],
+ " is what it actually passes along once selected. They are three ",
+ "separate learned views of the same underlying vector."
+}], "Text",ExpressionUUID->"b484b88d-2e32-4d74-b07c-a8534303bb5a"],
+
+Cell["3.  Why divide by Sqrt[d_k]?", "Section",ExpressionUUID->"a5956fc1-b17c-456a-9f02-2f343de805e0"],
+
+Cell[TextData[{
+ "Most treatments state the scaled dot-product formula ",
+ Cell[BoxData[
+  RowBox[{"softmax", "(", 
+   FractionBox[
+    RowBox[{"Q", "\[CenterDot]", 
+     SuperscriptBox["K", "\[Transpose]"]}], 
+    SqrtBox[
+     SubscriptBox["d", "k"]]], ")", "\[CenterDot]", "V"}]], "Text",
+  FontSize->14,ExpressionUUID->"d7cf20a6-67d3-4bd5-8934-d31cbfc5f60d"],
+ " and leave the ",
+ Cell[BoxData[
+  FractionBox["1", 
+   SqrtBox[
+    SubscriptBox["d", "k"]]]], "Text",
+  FontSize->14,ExpressionUUID->"2a285dee-18f9-4fa8-800f-bb7d2148bf68"],
+ " factor unexplained.  The argument is short and is one of the ",
+ "places where a small piece of probability theory makes a design ",
+ "choice obvious."
+}], "Text",ExpressionUUID->"0391caa8-c01a-45ed-8721-39eb3efb4006"],
+
+Cell[TextData[{
+ "Suppose ",
+ Cell[BoxData[
+  RowBox[{"q", ",", " ", "k", " ", "\[Element]", " ", 
+   SuperscriptBox["\[DoubleStruckCapitalR]", 
+    SubscriptBox["d", "k"]]}]], "Text",
+  FontSize->14,ExpressionUUID->"0f9c031d-d540-4b2c-925a-57e1d334d386"],
+ " with each component independently drawn from a zero-mean ",
+ "unit-variance distribution.  The dot product ",
+ Cell[BoxData[
+  RowBox[{"q", "\[CenterDot]", "k", "=", 
+   UnderoverscriptBox["\[Sum]", 
+    RowBox[{"i", "=", "1"}], 
+    SubscriptBox["d", "k"]], 
+   RowBox[{
+    SubscriptBox["q", "i"], 
+    SubscriptBox["k", "i"]}]}]], "Text",
+  FontSize->14,ExpressionUUID->"caf5d526-4363-43fc-bbaa-d7030cd6b246"],
+ " is a sum of ",
+ Cell[BoxData[
+  SubscriptBox["d", "k"]], "Text",
+  FontSize->14,ExpressionUUID->"8a9237b5-b15d-4c49-83c0-c916cb54bc76"],
+ " random terms ",
+ Cell[BoxData[
+  RowBox[{
+   SubscriptBox["q", "i"], 
+   SubscriptBox["k", "i"]}]], "Text",
+  FontSize->14,ExpressionUUID->"4614dfb9-5739-4ce2-a363-0f0e96157c08"],
+ ".  Each term has mean ",
+ Cell[BoxData[
+  RowBox[{"E", "[", 
+   SubscriptBox["q", "i"], 
+   SubscriptBox["k", "i"], "]", "=", "E", "[", 
+   SubscriptBox["q", "i"], "]", "\[CenterDot]", "E", "[", 
+   SubscriptBox["k", "i"], "]", "=", "0"}]], "Text",
+  FontSize->14,ExpressionUUID->"869dcd29-4df8-4377-9627-f3354fff816f"],
+ " and variance ",
+ Cell[BoxData[
+  RowBox[{"E", "[", 
+   SuperscriptBox[
+    SubscriptBox["q", "i"], "2"], "]", "\[CenterDot]", "E", "[", 
+   SuperscriptBox[
+    SubscriptBox["k", "i"], "2"], "]", "=", "1"}]], "Text",
+  FontSize->14,ExpressionUUID->"ca2b9706-deb4-48bd-8180-9e2a85d24186"],
+ " (using independence of ",
+ Cell[BoxData[
+  SubscriptBox["q", "i"]], "Text",
+  FontSize->14,ExpressionUUID->"861374ff-480d-4a60-bd08-3dd9c7f93bda"],
+ " and ",
+ Cell[BoxData[
+  SubscriptBox["k", "i"]], "Text",
+  FontSize->14,ExpressionUUID->"433df67f-351d-46e6-b2fe-e14d815170c4"],
+ " and that each has unit variance).  The ",
+ Cell[BoxData[
+  SubscriptBox["d", "k"]], "Text",
+  FontSize->14,ExpressionUUID->"ca09fc47-a70d-4949-b181-201ac95fd054"],
+ " terms are themselves independent across i, so the variance of ",
+ "the sum is the sum of the variances: ",
+ Cell[BoxData[
+  RowBox[{"Var", "(", "q", "\[CenterDot]", "k", ")", "=", 
+   SubscriptBox["d", "k"]}]], "Text",
+  FontSize->14,ExpressionUUID->"ba79e48a-216a-499b-8849-50c939195df0"],
+ ", and the standard deviation grows as ",
+ Cell[BoxData[
+  SqrtBox[
+   SubscriptBox["d", "k"]]], "Text",
+  FontSize->14,ExpressionUUID->"9a66e22a-bec7-4355-af52-2b8b658dddc8"],
+ "."
+}], "Text",ExpressionUUID->"9df202c2-c1b1-4c4e-bbec-afe201feb60e"],
+
+Cell[TextData[{
+ "We can verify this in two lines of Wolfram Language. Sample 2000 ",
+ "Gaussian (q, k) pairs at three values of ",
+ Cell[BoxData[
+  SubscriptBox["d", "k"]], "Text",
+  FontSize->14,ExpressionUUID->"9920d058-3cfb-4108-9d3c-3cbcd2f45713"],
+ " and look at the empirical distribution of their dot product:"
+}], "Text",ExpressionUUID->"080f2fe6-2895-4525-b94b-2f82d1b10760"],
+
+Cell["\<\
+SeedRandom[1];
+nSamples = 2000;
+dks = {16, 64, 256};
+dots = Association @ Table[
+  d -> Table[
+    With[{q = RandomReal[NormalDistribution[], d],
+          k = RandomReal[NormalDistribution[], d]},
+      q . k],
+    {nSamples}],
+  {d, dks}];
+StandardDeviation /@ dots\
+\>", "Input",ExpressionUUID->"d6481b07-31f0-4fd0-86c0-39d360d2e827"],
+
+Cell[TextData[{
+ "The empirical standard deviations come out to roughly 4, 8, 16 \[LongDash] \
+matching the predicted ",
+ Cell[BoxData[
+  SqrtBox[
+   SubscriptBox["d", "k"]]], "Text",
+  FontSize->14,ExpressionUUID->"440f7557-103a-4e3d-8257-992578f31519"],
+ " of 4, 8, 16 to within statistical error.  Now look at what this ",
+ "does to a softmax. Softmax of a vector whose entries have very ",
+ "large spread is degenerate: the largest entry dominates ",
+ "exponentially and all others are crushed to zero, so the gradient ",
+ "through the softmax is essentially zero. That is the gradient ",
+ "pathology that prevents a transformer from learning at any but the ",
+ "smallest scale."
+}], "Text",ExpressionUUID->"516933a7-cb47-48e0-8bb8-d09d2b1852ac"],
+
+Cell["Import[\"figures/qkdotproduct_variance.png\"]", "Input",ExpressionUUID->"117414f1-0a2f-44e5-b0f9-ee05bf66978c"],
+
+Cell[TextData[{
+ "Dividing by ",
+ Cell[BoxData[
+  SqrtBox[
+   SubscriptBox["d", "k"]]], "Text",
+  FontSize->14,ExpressionUUID->"0a1520a3-6362-48b4-adf1-6dbe9c49bb82"],
+ " returns the pre-softmax logits to unit variance, which keeps the ",
+ "softmax in its high-gradient regime.  The right-hand panel above ",
+ "shows the three distributions collapsing onto each other once we ",
+ "apply the scaling.  A concrete softmax demo on synthetic 8-token ",
+ "scores at ",
+ Cell[BoxData[
+  SubscriptBox["d", "k"]], "Text",
+  FontSize->14,ExpressionUUID->"5039775e-93b0-4959-aa4b-96d8cfa22970"],
+ " = 256:"
+}], "Text",ExpressionUUID->"4bcbd7b4-54f0-455c-a677-cb45bbddf816"],
+
+Cell["Import[\"figures/softmax_saturation.png\"]", "Input",ExpressionUUID->"177ecb51-03fd-426a-90a7-b04a60dc5388"],
+
+Cell["3.1  Interactive: turn the d_k dial", "Subsection",ExpressionUUID->"50e5dedd-3946-4595-96c3-4090413072a1"],
+
+Cell[TextData[{
+ "Slide ",
+ Cell[BoxData[
+  SubscriptBox["d", "k"]], "Text",
+  FontSize->14,ExpressionUUID->"4eaac222-c1db-4a14-b395-2ea50c233adc"],
+ " from 4 up to 1024 and watch what happens to ",
+ "(left) the empirical distribution of ",
+ Cell[BoxData[
+  RowBox[{"Q", "\[CenterDot]", 
+   SuperscriptBox["K", "\[Transpose]"]}]], "Text",
+  FontSize->14,ExpressionUUID->"fda658ea-2854-4d26-8b76-f544a535b158"],
+ " entries and (right) the softmax of a single row of those scores. ",
+ "The unscaled histogram blows up; the unscaled softmax collapses to ",
+ "near-one-hot. The right-hand panel switches scaling on or off with ",
+ "the second slider so you can see the difference instantly."
+}], "Text",ExpressionUUID->"6d54e988-efec-417c-8d6a-7b048a97c333"],
+
+Cell["\<\
+Manipulate[
+  SeedRandom[1];
+  Module[{nSamples = 600, nRow = 16, dots, row, scale, sm},
+    (* Empirical distribution of q.k for many random (q,k) pairs. *)
+    dots = Table[
+      With[{q = RandomReal[NormalDistribution[], dk],
+            k = RandomReal[NormalDistribution[], dk]},
+        q . k],
+      {nSamples}];
+    scale = If[useScaling, Sqrt[N[dk]], 1.0];
+    (* One row of Q.K^T: a single query against nRow keys, all in R^{dk}. *)
+    With[{q = RandomReal[NormalDistribution[], dk],
+          K = RandomReal[NormalDistribution[], {nRow, dk}]},
+      row = (K . q) / scale];
+    sm = Exp[row - Max[row]]; sm = sm / Total[sm];
+    GraphicsRow[{
+      Histogram[dots/scale, 30, \"PDF\",
+        PlotRange -> {{-6, 6}, {0, 0.8}},
+        Frame -> True,
+        FrameLabel -> {If[useScaling, \"q\[CenterDot]k / \[Sqrt]d_k\", \"q\
+\[CenterDot]k\"],
+                       \"PDF\"},
+        PlotLabel -> Row[{\"std = \",
+          NumberForm[StandardDeviation[dots/scale], 3]}],
+        ImageSize -> 300],
+      BarChart[sm,
+        Frame -> True,
+        PlotLabel -> Row[{\"softmax row (\", If[useScaling, \"scaled\", \
+\"unscaled\"], \")\"}],
+        FrameLabel -> {\"key position\", \"attention weight\"},
+        PlotRange -> {Automatic, {0, 1}},
+        ImageSize -> 300]
+    }, ImageSize -> 640]
+  ],
+  {{dk, 64, \"d_k\"}, 4, 1024, 4, Appearance -> \"Labeled\"},
+  {{useScaling, True, \"divide by \[Sqrt]d_k\"}, {True, False}},
+  ControlPlacement -> Top]\
+\>", "Input",ExpressionUUID->"a9d1fea3-008b-4e34-8449-a0e4122d49a5"],
+
+Cell[TextData[{
+ "Why this matters: pull ",
+ Cell[BoxData[
+  SubscriptBox["d", "k"]], "Text",
+  FontSize->14,ExpressionUUID->"a982f0bc-1709-49ac-9d15-5858e024b5cd"],
+ " up past about 128 with scaling ",
+ "off and you can see the softmax collapse to a single non-zero entry. ",
+ "That is what a transformer would face on every step of training if ",
+ "the ",
+ Cell[BoxData[
+  FractionBox["1", 
+   SqrtBox[
+    SubscriptBox["d", "k"]]]], "Text",
+  FontSize->14,ExpressionUUID->"f9e967c6-21a7-4b49-a1b2-012f45bd5d10"],
+ " divisor were not there \[LongDash] gradient ",
+ "everywhere zero, optimisation stalled. With the divisor on, the ",
+ "softmax stays usable regardless of ",
+ Cell[BoxData[
+  SubscriptBox["d", "k"]], "Text",
+  FontSize->14,ExpressionUUID->"6723d0bd-8358-4aa4-8a5c-de5ef9dbef23"],
+ "."
+}], "Text",ExpressionUUID->"deab3259-603a-4399-8eb5-ab4555168637"],
+
+Cell[TextData[{
+ "Left panel: without scaling, the softmax is essentially picking ",
+ "one entry per row, so the gradient of the loss with respect to the ",
+ "non-winning logits is essentially zero.  Right panel: with the ",
+ Cell[BoxData[
+  FractionBox["1", 
+   SqrtBox[
+    SubscriptBox["d", "k"]]]], "Text",
+  FontSize->14,ExpressionUUID->"c51788b6-56ff-409c-9c5e-f29dcabe1a81"],
+ " scaling, the softmax distributes mass meaningfully, ",
+ "and gradients flow."
+}], "Text",ExpressionUUID->"60cdee9a-1693-42b8-8ee5-63d5dbf7457d"],
+
+Cell["4.  Causal masking", "Section",ExpressionUUID->"968be1c5-e520-4b30-9f83-80aaed7035a1"],
+
+Cell[TextData[{
+ "A language model is only allowed to attend to past tokens, never ",
+ "to future ones.  Implementation: add a strict-upper-triangular ",
+ "matrix of ",
+ Cell[BoxData[
+  RowBox[{"-", "\[Infinity]"}]], "Text",
+  FontSize->14,ExpressionUUID->"8fd1b324-94ee-40f6-982f-7b3051006542"],
+ " to the pre-softmax score matrix; after row-wise softmax those ",
+ "entries become exactly zero.  In Wolfram Language, with a large ",
+ "negative number standing in for ",
+ Cell[BoxData[
+  RowBox[{"-", "\[Infinity]"}]], "Text",
+  FontSize->14,ExpressionUUID->"8a1c333d-594d-4432-8ce1-ad475acf5106"],
+ " (the latter participates in NaN-producing arithmetic upstream):"
+}], "Text",ExpressionUUID->"1eeb3298-1cb1-492a-af0f-a649ee7c144e"],
+
+Cell["LLMAtoZ`Attention`causalMask[6] // MatrixForm", "Input",ExpressionUUID->"44f97322-f649-4f74-a46e-ab422fe5682c"],
+
+Cell[TextData[{
+ "The triangular indexing here uses WL's 1-based convention. ",
+ "UpperTriangularize with second argument ",
+ StyleBox["1",
+  FontFamily->"Courier"],
+ " means \[OpenCurlyDoubleQuote]above the main diagonal\
+\[CloseCurlyDoubleQuote] (so the diagonal itself stays zero \[LongDash] ",
+ "a token may attend to itself)."
+}], "Text",ExpressionUUID->"029bebbc-402f-425e-aa89-07f040f9f7c3"],
+
+Cell["Import[\"figures/causal_mask_visualisation.png\"]", "Input",ExpressionUUID->"536a3b80-3023-4c85-86f3-5a832da6121d"],
+
+Cell["\<\
+Left to right: the mask, the masked scores (random pre-softmax scores plus \
+the mask), and the row-wise softmax weights. The upper triangle is exactly \
+zero after softmax; the lower triangle plus diagonal carries the actual \
+attention weights.\
+\>", "Text",ExpressionUUID->"0544abba-34af-465d-8baf-9d7ccc86d933"],
+
+Cell["5.  Single-head causal self-attention as a NetGraph", "Section",ExpressionUUID->"3b02ecf1-ec61-481b-9635-c3aa1d303904"],
+
+Cell[TextData[{
+ "Six nodes: three ",
+ StyleBox["LinearLayer",
+  FontFamily->"Courier"],
+ " projections for Q, K, V; a ",
+ StyleBox["FunctionLayer",
+  FontFamily->"Courier"],
+ " that computes ",
+ Cell[BoxData[
+  FractionBox[
+   RowBox[{"Q", "\[CenterDot]", 
+    SuperscriptBox["K", "\[Transpose]"]}], 
+   SqrtBox[
+    SubscriptBox["d", "head"]]]], "Text",
+  FontSize->14,ExpressionUUID->"76bb2c20-e879-480b-af43-54f6b8878147"],
+ " and adds the causal mask; a ",
+ StyleBox["SoftmaxLayer",
+  FontFamily->"Courier"],
+ " for the row-wise normalisation; and a final ",
+ StyleBox["FunctionLayer",
+  FontFamily->"Courier"],
+ " for the value gather. The whole graph is six lines."
+}], "Text",ExpressionUUID->"08f99c04-40be-4159-9a58-6740602bfb39"],
+
+Cell["\<\
+head = LLMAtoZ`Attention`singleHeadCausalAttention[64, 32, 16]\
+\>", "Input",ExpressionUUID->"ff75b379-7993-49cd-8cff-5858932c7d84"],
+
+Cell[TextData[{
+ "Each ",
+ StyleBox["LinearLayer",
+  FontFamily->"Courier"],
+ " is wrapped in ",
+ StyleBox["NetMapOperator",
+  FontFamily->"Courier"],
+ " so it applies row-wise to a (seqLen, dModel) input \[LongDash] ",
+ "this is the WL idiom for \[OpenCurlyDoubleQuote]apply this layer to every \
+position in the sequence\[CloseCurlyDoubleQuote]. The score and output ",
+ StyleBox["FunctionLayer",
+  FontFamily->"Courier"],
+ "s are transparent: anyone reading the source sees the actual ",
+ "matrix multiplication."
+}], "Text",ExpressionUUID->"4c560b9d-023d-4cb6-80a4-8aa9112588d1"],
+
+Cell["\<\
+SeedRandom[42];
+x = RandomReal[NormalDistribution[0, 0.1], {16, 64}];
+out = head[x];
+Dimensions[out]\
+\>", "Input",ExpressionUUID->"0d2af4bf-0ed7-47a9-a893-c2d7b6a5678c"],
+
+Cell["\<\
+(seqLen, dHead) in, (seqLen, dHead) out. Sixteen positions, each rebuilt as a \
+weighted average of its allowed predecessors. Note that the causal mask is \
+baked into the NetGraph at the maxSeqLen passed to the constructor; calling \
+this single-head block on a shorter input requires either padding to \
+maxSeqLen or constructing a smaller block. In a production training loop we \
+use one block at the training maxSeqLen throughout. Production attention \
+often also includes a dropout on the post-softmax weights for regularisation; \
+we omit it here for pedagogical clarity and re-introduce it in Part 4.\
+\>", "Text",ExpressionUUID->"5c0b8902-36e5-4491-a821-c418de338d4d"],
+
+Cell["6.  Multi-head attention", "Section",ExpressionUUID->"1708c716-98e0-4b49-a903-4bda4fb605e8"],
+
+Cell[TextData[{
+ "A single head can only attend in one way at a time.  Multi-head ",
+ "attention runs ",
+ Cell[BoxData[
+  SubscriptBox["n", "heads"]], "Text",
+  FontSize->14,ExpressionUUID->"d57a9f78-3b34-4ce2-99a4-2b0de7f57c0f"],
+ " parallel single-head computations: each head applies its own ",
+ "learned projections of the full input down to dimension ",
+ Cell[BoxData[
+  SubscriptBox["d", "head"]], "Text",
+  FontSize->14,ExpressionUUID->"99de8e58-46d3-454d-b088-dfeb56338be9"],
+ ", computes attention independently, and produces its own ",
+ Cell[BoxData[
+  SubscriptBox["d", "head"]], "Text",
+  FontSize->14,ExpressionUUID->"c0472b1d-86f6-4ce2-8d70-5868a5114bb7"],
+ "-dimensional output. The heads are then concatenated and a final ",
+ "output projection mixes them back into a ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"427eba6d-b8df-454f-9fe4-de95e2eb8bda"],
+ "-vector. The architectural trick is to split ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"d9cd1cdd-53f8-48c5-b92c-70345c2a2e79"],
+ " into ",
+ Cell[BoxData[
+  SubscriptBox["n", "heads"]], "Text",
+  FontSize->14,ExpressionUUID->"dea5681e-f275-4041-82cc-c8a8a0514230"],
+ " equal pieces so the multi-head version has the same parameter ",
+ "count as a single-head version at ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"bcd2956a-afbe-439a-a5f2-cb6c365eb68c"],
+ "."
+}], "Text",ExpressionUUID->"1e6354ee-1a3b-41d6-87f0-768fbcf93d96"],
+
+Cell[TextData[{
+ "For pedagogical clarity our package implements the parallel-heads ",
+ "form directly: ",
+ Cell[BoxData[
+  SubscriptBox["n", "heads"]], "Text",
+  FontSize->14,ExpressionUUID->"4c144f0c-4df8-4bfb-b35a-4834a88d5e5a"],
+ " independent ",
+ StyleBox["singleHeadCausalAttention",
+  FontFamily->"Courier"],
+ " subgraphs feeding a ",
+ StyleBox["CatenateLayer",
+  FontFamily->"Courier"],
+ " and an output ",
+ StyleBox["LinearLayer",
+  FontFamily->"Courier"],
+ ".  A production version would project Q, K, V once at the full ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"7b0d64c3-159b-4397-9e61-ead389efdbf2"],
+ " width and then reshape into heads, saving the ",
+ "duplicate projection overhead; the I/O is identical."
+}], "Text",ExpressionUUID->"859a7675-9e29-4652-959e-8234dbe039fa"],
+
+Cell["\<\
+mha = LLMAtoZ`Attention`multiHeadAttentionBlock[64, 4, 16];
+mha[x] // Dimensions\
+\>", "Input",ExpressionUUID->"9ef6e45d-fb3d-45ad-a39d-24be9d56eb4d"],
+
+Cell["7.  What real attention looks like: GPT-2 small", "Section",ExpressionUUID->"3da619ac-1582-4814-b3a8-1b59318db13b"],
+
+Cell[TextData[{
+ "We can do something the typical from-scratch tutorial cannot: ",
+ "load a fully pretrained language model from ",
+ StyleBox["NetModel",
+  FontFamily->"Courier"],
+ " and look at its actual attention patterns.  GPT-2 small is a ",
+ "12-layer transformer with 12 heads per layer at ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"6aa0d7d0-dec2-444f-8e43-ca2c65a796b0"],
+ " = 768, ",
+ Cell[BoxData[
+  SubscriptBox["d", "head"]], "Text",
+  FontSize->14,ExpressionUUID->"d33669a8-5f29-4307-9fe3-06b50fe3b79e"],
+ " = 64.  Each block's attention sublayer holds four ",
+ "learned matrices: ",
+ Cell[BoxData[
+  SubscriptBox["W", "Q"]], "Text",
+  FontSize->14,ExpressionUUID->"6fbce03c-1f1c-494c-bf5a-9f2bf93cd97a"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["W", "K"]], "Text",
+  FontSize->14,ExpressionUUID->"5eb9bcfd-a1a8-4f7a-920b-e16ff3b78bf0"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["W", "V"]], "Text",
+  FontSize->14,ExpressionUUID->"67cc8e09-72b5-4c50-a001-55b9b6dbe538"],
+ " (768\[Times]768 each) plus a 768\[Times]768 output projection.  ",
+ "We have the weights; we can recompute the attention weight matrix ",
+ "for any input prompt by hand using the same scaled-dot-product ",
+ "formula we just built."
+}], "Text",ExpressionUUID->"744b493d-1456-4343-a050-3923e79d4a00"],
+
+Cell["\<\
+ids = LLMAtoZ`Attention`gpt2EncodePrompt[gpt,
+  \"The quick brown fox jumps over the lazy dog\"];
+weights5 = LLMAtoZ`Attention`gpt2AttentionWeights[gpt, ids, 5];
+Dimensions[weights5]\
+\>", "Input",ExpressionUUID->"3be76208-1d6c-4173-b6eb-02a0eb4e3dbb"],
+
+Cell[TextData[{
+ "Twelve heads, nine tokens, nine tokens per head.  Each row of each ",
+ "head sums to one (we use the same ",
+ StyleBox["softmaxRows",
+  FontFamily->"Courier"],
+ " utility the from-scratch attention uses).  Plotting all twelve ",
+ "heads of layer 5:"
+}], "Text",ExpressionUUID->"7fd95851-9532-4878-be78-f37a23cd3fb1"],
+
+Cell["Import[\"figures/gpt2_heads_gallery.png\"]", "Input",ExpressionUUID->"6e6870a0-6a0f-4072-ac52-65e61c542adf"],
+
+Cell[TextData[{
+ "Two features jump out.  First, every head has a heavily-shaded ",
+ "leftmost column \[LongDash] a phenomenon called the ",
+ StyleBox["attention sink",
+  FontSlant->Italic],
+ " (Xiao et al., 2024): attention heads dump probability mass onto ",
+ "the first token as a \[OpenCurlyDoubleQuote]no-op\[CloseCurlyDoubleQuote] \
+vote when they have nothing more useful to do.  ",
+ "Second, the heads are not all doing the same thing.  Hand-picking ",
+ "three to illustrate the kinds of specialisation that emerge from ",
+ "training:"
+}], "Text",ExpressionUUID->"e44a9867-b32c-446b-abb7-47fa37824335"],
+
+Cell["Import[\"figures/gpt2_head_specialisation.png\"]", "Input",ExpressionUUID->"4c2dc144-7a7c-4c49-a3ea-18f028d5631f"],
+
+Cell["\<\
+Left: a head that allocates noticeable weight to the previous token (the \
+row-i, col-(i\[Minus]1) diagonal).  Middle: a head whose non-sink mass sits \
+firmly on the diagonal \[LongDash] each token re-attends to itself, a \
+re-write rather than a look-back. Right: a head that spreads roughly \
+uniformly across all previous tokens, contributing a smoothed average of the \
+prefix rather than any specific position. None of these specialisations is \
+enforced architecturally; they are what twelve heads turn into when trained \
+against billions of tokens of text.\
+\>", "Text",ExpressionUUID->"3cbbbbe7-862e-4a71-9b4c-a5f543713f86"],
+
+Cell["7.1  Interactive: browse all 12 layers \[Times] 12 heads", "Subsection",ExpressionUUID->"36a970ff-3898-41b7-bcc2-63619f759e53"],
+
+Cell[TextData[{
+ "Pre-extracted attention tensors for every layer of GPT-2 small on ",
+ "the same prompt are cached in ",
+ StyleBox["data/gpt2_attention_all_layers.wxf",
+  FontFamily->"Courier"],
+ ". The widget below lets you scrub through layer and head and watch ",
+ "the structure change. Lower layers look fairly similar across heads; ",
+ "by the middle of the stack each head has carved out its own pattern."
+}], "Text",ExpressionUUID->"0542dbed-f786-4e92-92ed-059c0c935a3a"],
+
+Cell["\<\
+attCache = Import[\"data/gpt2_attention_all_layers.wxf\"];
+Manipulate[
+  With[{w = attCache[\"weights\"][layer][[head]],
+        n = Length[attCache[\"ids\"]]},
+    MatrixPlot[w,
+      ColorFunction -> \"ThermometerColors\",
+      ColorFunctionScaling -> True,
+      FrameTicks -> {{Range[n], None}, {Range[n], None}},
+      PlotLabel -> Row[{\"GPT-2 small  \[Bullet]  layer \", layer,
+                        \"  \[Bullet]  head \", head,
+                        \"  \[Bullet]  prompt: \\\"\",
+                        attCache[\"prompt\"], \"\\\"\"}],
+      PlotLegends -> Automatic,
+      ImageSize -> 460]
+  ],
+  {{layer, 5, \"layer\"}, 1, 12, 1, Appearance -> \"Labeled\"},
+  {{head, 1, \"head\"}, 1, 12, 1, Appearance -> \"Labeled\"},
+  ControlPlacement -> Top]\
+\>", "Input",ExpressionUUID->"f1502ece-683a-490b-a0cb-068bcf94633f"],
+
+Cell["\<\
+Things worth scrubbing for:
+\[FilledCircle] Layer 1, all heads: mostly diffuse \[LongDash] there is not \
+yet much per-head differentiation.
+\[FilledCircle] Layers 4\[Dash]7: the cleanest specialisation \[LongDash] \
+diagonal heads, previous-token heads, uniform heads.
+\[FilledCircle] Layers 8\[Dash]11: messier looking but doing more abstract \
+work \[LongDash] heads here often attend to specific syntactic relationships \
+that are hard to spot without an interpretability tool.
+\[FilledCircle] Layer 12: returns to relatively simple patterns because it \
+has to produce the final output distribution.\
+\>", "Text",ExpressionUUID->"3dd726f7-3fd1-4e4d-8313-fd64b3fc9c91"],
+
+Cell["8.  Summary and what comes next", "Section",ExpressionUUID->"74b6ecdb-3da6-486e-8ccd-1f0113b98f42"],
+
+Cell["\<\
+We finish Part 2 with six concrete deliverables, each reusable in the parts \
+that follow:\
+\>", "Text",ExpressionUUID->"fa0688de-db6f-4cf5-9910-8c4ac4ade175"],
+
+Cell[TextData[{
+ "\[FilledSquare] ",
+ StyleBox["A first-principles derivation of the ",
+  FontWeight->Bold],
+ Cell[BoxData[
+  FractionBox["1", 
+   SqrtBox[
+    SubscriptBox["d", "k"]]]], "Text",
+  FontSize->14,ExpressionUUID->"ab767c04-456f-463c-a7dc-ee0d8d3f91c9"],
+ " ",
+ StyleBox["factor.",
+  FontWeight->Bold],
+ " The dot product of two zero-mean unit-variance vectors of length ",
+ Cell[BoxData[
+  SubscriptBox["d", "k"]], "Text",
+  FontSize->14,ExpressionUUID->"851a0697-cd79-4b81-97b5-d0217bd129cd"],
+ " has variance ",
+ Cell[BoxData[
+  SubscriptBox["d", "k"]], "Text",
+  FontSize->14,ExpressionUUID->"0ce10fee-6634-41d1-91f9-69724c0b941f"],
+ " by independence; dividing by ",
+ Cell[BoxData[
+  SqrtBox[
+   SubscriptBox["d", "k"]]], "Text",
+  FontSize->14,ExpressionUUID->"081f3755-dda2-428b-8fc5-36a6e73b40a9"],
+ " restores unit variance so the softmax does not saturate. The figure ",
+ StyleBox["qkdotproduct_variance.png",
+  FontFamily->"Courier"],
+ " confirms the prediction empirically at ",
+ Cell[BoxData[
+  SubscriptBox["d", "k"]], "Text",
+  FontSize->14,ExpressionUUID->"c1182c4e-de8f-433b-9e63-db5bec86551e"],
+ " \[Element] {16, 64, 256}.\n",
+ "\[FilledSquare] ",
+ StyleBox["A live d_k dial.",
+  FontWeight->Bold],
+ " Section 3.1's ",
+ StyleBox["Manipulate",
+  FontFamily->"Courier"],
+ " widget lets the reader slide ",
+ Cell[BoxData[
+  SubscriptBox["d", "k"]], "Text",
+  FontSize->14,ExpressionUUID->"aae9ce54-17cf-4d3c-a306-095d53d721b7"],
+ " from 4 to 1024 and toggle the ",
+ Cell[BoxData[
+  FractionBox["1", 
+   SqrtBox[
+    SubscriptBox["d", "k"]]]], "Text",
+  FontSize->14,ExpressionUUID->"41dff02e-3abd-4c52-82c5-85b0797ce9be"],
+ " scaling on or off, watching the histogram and a sample softmax row ",
+ "update in real time \[LongDash] the variance argument as an active ",
+ "document, not a static figure.\n",
+ "\[FilledSquare] ",
+ StyleBox["A causal mask.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["causalMask[n]",
+  FontFamily->"Courier"],
+ " plus a three-panel figure showing the mask, the masked scores, and ",
+ "the row-wise softmax weights.\n",
+ "\[FilledSquare] ",
+ StyleBox["A single-head causal-attention NetGraph and a multi-head ",
+  FontWeight->Bold],
+ StyleBox["block constructor.",
+  FontWeight->Bold],
+ " Six and 4+nHeads nodes respectively; everything is a ",
+ StyleBox["LinearLayer",
+  FontFamily->"Courier"],
+ ", a ",
+ StyleBox["FunctionLayer",
+  FontFamily->"Courier"],
+ ", or a ",
+ StyleBox["SoftmaxLayer",
+  FontFamily->"Courier"],
+ " so every step is inspectable via ",
+ StyleBox["NetExtract",
+  FontFamily->"Courier"],
+ ".\n",
+ "\[FilledSquare] ",
+ StyleBox["A GPT-2 attention extractor.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["gpt2AttentionWeights[gpt, ids, layer]",
+  FontFamily->"Courier"],
+ " recovers the (12, seqLen, seqLen) tensor for any layer of pretrained ",
+ "GPT-2 small by manually replaying the scaled-dot-product computation ",
+ "on the extracted Q, K weights. Used to produce a 12-head gallery and ",
+ "a 3-head specialisation figure that names three of the recurring ",
+ "head archetypes (previous-token, self-attention diagonal, ",
+ "approximately-uniform).\n",
+ "\[FilledSquare] ",
+ StyleBox["An interactive layer/head scrubber.",
+  FontWeight->Bold],
+ " Section 7.1's ",
+ StyleBox["Manipulate",
+  FontFamily->"Courier"],
+ " reads the cached all-layer attention tensor (94 KB of ",
+ StyleBox[".wxf",
+  FontFamily->"Courier"],
+ ") and renders the heatmap for any (layer, head) pair on the fly. ",
+ "Scrub up through the layers and watch the per-head differentiation ",
+ "appear by layers 4\[Dash]7."
+}], "Text",ExpressionUUID->"bc197d6e-acda-4e8b-803e-c883abae7711"],
+
+Cell[TextData[{
+ "In ",
+ StyleBox["Part 3",
+  FontWeight->Bold],
+ " we wrap this attention block in the canonical transformer ",
+ "envelope: pre-norm, residual, feed-forward, residual, stacked ",
+ Cell[BoxData[
+  SubscriptBox["n", "layers"]], "Text",
+  FontSize->14,ExpressionUUID->"add6212c-2a46-4068-9cfc-401ef9020156"],
+ " times.  We will derive the parameter count as a closed-form function ",
+ "of (",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"67070a71-9e4e-44c0-b68f-5a86800542cd"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["d", "ff"]], "Text",
+  FontSize->14,ExpressionUUID->"24537995-0cab-4da6-b434-34104a77f5c5"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["n", "heads"]], "Text",
+  FontSize->14,ExpressionUUID->"adb2c74d-79cb-42b0-b567-5f674c804ea1"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["n", "layers"]], "Text",
+  FontSize->14,ExpressionUUID->"9a800d51-f64b-4a8a-bc10-6391af133b40"],
+ ", |V|), ",
+ "build three model sizes (1M, 5M, 25M parameters) for use in Part 4, ",
+ "and verify the formula against the actual ",
+ StyleBox["Information",
+  FontFamily->"Courier"],
+ " counts WL returns for each net."
+}], "Text",ExpressionUUID->"d57bf5e3-3a7c-484b-ba4f-eeaba2a473c1"],
+
+Cell["References", "Section",ExpressionUUID->"0b948509-6193-4ec6-80d2-f079fdb7eb84"],
+
+Cell["\<\
+Vaswani, A. et al. (2017). Attention Is All You Need. NeurIPS.
+Radford, A. et al. (2019). Language Models are Unsupervised Multitask Learners.
+Xiao, G. et al. (2024). Efficient Streaming Language Models with Attention \
+Sinks. ICLR.
+Raschka, S. (2024). Build a Large Language Model from Scratch. Manning.\
+\>", "Text",ExpressionUUID->"0a45707a-fdb3-44ec-a798-33de8ced5cd8"]
+},
+Saveable->True,
+WindowSize->{900, 750},
+FrontEndVersion->"14.3 for Mac OS X ARM (64-bit) (July 8, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"6bdba494-573f-4478-99ec-40246ab1fbe1"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[554, 20, 153, 2, 70, "Title",ExpressionUUID->"7a789b1a-3393-4b38-8e9d-4f58df747409"],
+Cell[710, 24, 117, 0, 70, "Subtitle",ExpressionUUID->"235e31e6-9595-427f-a55e-0d02e230928a"],
+Cell[830, 26, 559, 11, 70, "Text",ExpressionUUID->"5fc63b49-1f16-4488-8664-02e531d7bd3a"],
+Cell[1392, 39, 108, 0, 70, "Text",ExpressionUUID->"738e68e7-fa94-453b-961d-afb6c2e390e3"],
+Cell[1503, 41, 1103, 27, 70, "Text",ExpressionUUID->"3c2b8514-19ca-461a-bdbc-71d99eb283b7"],
+Cell[2609, 70, 163, 2, 70, "Input",ExpressionUUID->"f89f7d3d-7686-4a20-8f7e-c1954f7c34dc"],
+Cell[2775, 74, 83, 0, 70, "Section",ExpressionUUID->"8db1b229-6094-425c-b451-c2e5bb46e376"],
+Cell[2861, 76, 129, 0, 70, "Text",ExpressionUUID->"7f4aacdc-596a-4256-b2c5-98b2bef5e1d6"],
+Cell[2993, 78, 105, 0, 70, "Input",ExpressionUUID->"30efebee-67ec-4ad4-af4b-ce57c7ad928e"],
+Cell[3101, 80, 97, 0, 70, "Input",ExpressionUUID->"dfd45199-4381-44bf-9594-854deafd6fd8"],
+Cell[3201, 82, 449, 10, 70, "Text",ExpressionUUID->"5383ffa2-8557-4f38-92fd-48ae29b68c77"],
+Cell[3653, 94, 192, 3, 70, "Input",ExpressionUUID->"7da63834-1908-4c09-81c3-9bc62e04ff2c"],
+Cell[3848, 99, 115, 0, 70, "Section",ExpressionUUID->"482edf32-1b30-4d80-8505-ccac88fe75ef"],
+Cell[3966, 101, 1570, 40, 70, "Text",ExpressionUUID->"3f830671-fe6f-4ebc-a9e9-348038920e4b"],
+Cell[5539, 143, 1123, 28, 70, "Text",ExpressionUUID->"87b5a088-e46f-4d60-b0f2-6c5f30b673cd"],
+Cell[6665, 173, 498, 12, 70, "Text",ExpressionUUID->"b484b88d-2e32-4d74-b07c-a8534303bb5a"],
+Cell[7166, 187, 102, 0, 70, "Section",ExpressionUUID->"a5956fc1-b17c-456a-9f02-2f343de805e0"],
+Cell[7271, 189, 763, 19, 70, "Text",ExpressionUUID->"0391caa8-c01a-45ed-8721-39eb3efb4006"],
+Cell[8037, 210, 2604, 68, 70, "Text",ExpressionUUID->"9df202c2-c1b1-4c4e-bbec-afe201feb60e"],
+Cell[10644, 280, 385, 7, 70, "Text",ExpressionUUID->"080f2fe6-2895-4525-b94b-2f82d1b10760"],
+Cell[11032, 289, 347, 12, 70, "Input",ExpressionUUID->"d6481b07-31f0-4fd0-86c0-39d360d2e827"],
+Cell[11382, 303, 750, 14, 70, "Text",ExpressionUUID->"516933a7-cb47-48e0-8bb8-d09d2b1852ac"],
+Cell[12135, 319, 117, 0, 70, "Input",ExpressionUUID->"117414f1-0a2f-44e5-b0f9-ee05bf66978c"],
+Cell[12255, 321, 663, 15, 70, "Text",ExpressionUUID->"4bcbd7b4-54f0-455c-a677-cb45bbddf816"],
+Cell[12921, 338, 114, 0, 70, "Input",ExpressionUUID->"177ecb51-03fd-426a-90a7-b04a60dc5388"],
+Cell[13038, 340, 112, 0, 70, "Subsection",ExpressionUUID->"50e5dedd-3946-4595-96c3-4090413072a1"],
+Cell[13153, 342, 754, 15, 70, "Text",ExpressionUUID->"6d54e988-efec-417c-8d6a-7b048a97c333"],
+Cell[13910, 359, 1546, 38, 70, "Input",ExpressionUUID->"a9d1fea3-008b-4e34-8449-a0e4122d49a5"],
+Cell[15459, 399, 868, 21, 70, "Text",ExpressionUUID->"deab3259-603a-4399-8eb5-ab4555168637"],
+Cell[16330, 422, 530, 11, 70, "Text",ExpressionUUID->"60cdee9a-1693-42b8-8ee5-63d5dbf7457d"],
+Cell[16863, 435, 92, 0, 70, "Section",ExpressionUUID->"968be1c5-e520-4b30-9f83-80aaed7035a1"],
+Cell[16958, 437, 733, 14, 70, "Text",ExpressionUUID->"1eeb3298-1cb1-492a-af0f-a649ee7c144e"],
+Cell[17694, 453, 117, 0, 70, "Input",ExpressionUUID->"44f97322-f649-4f74-a46e-ab422fe5682c"],
+Cell[17814, 455, 398, 8, 70, "Text",ExpressionUUID->"029bebbc-402f-425e-aa89-07f040f9f7c3"],
+Cell[18215, 465, 121, 0, 70, "Input",ExpressionUUID->"536a3b80-3023-4c85-86f3-5a832da6121d"],
+Cell[18339, 467, 325, 5, 70, "Text",ExpressionUUID->"0544abba-34af-465d-8baf-9d7ccc86d933"],
+Cell[18667, 474, 125, 0, 70, "Section",ExpressionUUID->"3b02ecf1-ec61-481b-9635-c3aa1d303904"],
+Cell[18795, 476, 739, 22, 70, "Text",ExpressionUUID->"08f99c04-40be-4159-9a58-6740602bfb39"],
+Cell[19537, 500, 142, 2, 70, "Input",ExpressionUUID->"ff75b379-7993-49cd-8cff-5858932c7d84"],
+Cell[19682, 504, 583, 14, 70, "Text",ExpressionUUID->"4c560b9d-023d-4cb6-80a4-8aa9112588d1"],
+Cell[20268, 520, 180, 5, 70, "Input",ExpressionUUID->"0d2af4bf-0ed7-47a9-a893-c2d7b6a5678c"],
+Cell[20451, 527, 688, 9, 70, "Text",ExpressionUUID->"5c0b8902-36e5-4491-a821-c418de338d4d"],
+Cell[21142, 538, 98, 0, 70, "Section",ExpressionUUID->"1708c716-98e0-4b49-a903-4bda4fb605e8"],
+Cell[21243, 540, 1530, 34, 70, "Text",ExpressionUUID->"1e6354ee-1a3b-41d6-87f0-768fbcf93d96"],
+Cell[22776, 576, 834, 21, 70, "Text",ExpressionUUID->"859a7675-9e29-4652-959e-8234dbe039fa"],
+Cell[23613, 599, 160, 3, 70, "Input",ExpressionUUID->"9ef6e45d-fb3d-45ad-a39d-24be9d56eb4d"],
+Cell[23776, 604, 121, 0, 70, "Section",ExpressionUUID->"3da619ac-1582-4814-b3a8-1b59318db13b"],
+Cell[23900, 606, 1324, 31, 70, "Text",ExpressionUUID->"744b493d-1456-4343-a050-3923e79d4a00"],
+Cell[25227, 639, 262, 5, 70, "Input",ExpressionUUID->"3be76208-1d6c-4173-b6eb-02a0eb4e3dbb"],
+Cell[25492, 646, 334, 7, 70, "Text",ExpressionUUID->"7fd95851-9532-4878-be78-f37a23cd3fb1"],
+Cell[25829, 655, 114, 0, 70, "Input",ExpressionUUID->"6e6870a0-6a0f-4072-ac52-65e61c542adf"],
+Cell[25946, 657, 610, 11, 70, "Text",ExpressionUUID->"e44a9867-b32c-446b-abb7-47fa37824335"],
+Cell[26559, 670, 120, 0, 70, "Input",ExpressionUUID->"4c2dc144-7a7c-4c49-a3ea-18f028d5631f"],
+Cell[26682, 672, 644, 9, 70, "Text",ExpressionUUID->"3cbbbbe7-862e-4a71-9b4c-a5f543713f86"],
+Cell[27329, 683, 133, 0, 70, "Subsection",ExpressionUUID->"36a970ff-3898-41b7-bcc2-63619f759e53"],
+Cell[27465, 685, 480, 8, 70, "Text",ExpressionUUID->"0542dbed-f786-4e92-92ed-059c0c935a3a"],
+Cell[27948, 695, 846, 19, 70, "Input",ExpressionUUID->"f1502ece-683a-490b-a0cb-068bcf94633f"],
+Cell[28797, 716, 683, 11, 70, "Text",ExpressionUUID->"3dd726f7-3fd1-4e4d-8313-fd64b3fc9c91"],
+Cell[29483, 729, 105, 0, 70, "Section",ExpressionUUID->"74b6ecdb-3da6-486e-8ccd-1f0113b98f42"],
+Cell[29591, 731, 169, 3, 70, "Text",ExpressionUUID->"fa0688de-db6f-4cf5-9910-8c4ac4ade175"],
+Cell[29763, 736, 3627, 102, 70, "Text",ExpressionUUID->"bc197d6e-acda-4e8b-803e-c883abae7711"],
+Cell[33393, 840, 1216, 32, 70, "Text",ExpressionUUID->"d57bf5e3-3a7c-484b-ba4f-eeaba2a473c1"],
+Cell[34612, 874, 84, 0, 70, "Section",ExpressionUUID->"0b948509-6193-4ec6-80d2-f079fdb7eb84"],
+Cell[34699, 876, 383, 6, 70, "Text",ExpressionUUID->"0a45707a-fdb3-44ec-a798-33de8ced5cd8"]
+}
+]
+*)
+
+(* End of internal cache information *)

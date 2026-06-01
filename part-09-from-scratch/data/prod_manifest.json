@@ -1,0 +1,22 @@
+{
+  "runPrefix": "runs/pretrain-30M-v1",
+  "shardKeys": [
+    "runs/pretrain-30M-v1/shards/s00.bin",
+    "runs/pretrain-30M-v1/shards/s01.bin",
+    "runs/pretrain-30M-v1/shards/s02.bin",
+    "runs/pretrain-30M-v1/shards/s03.bin",
+    "runs/pretrain-30M-v1/shards/s04.bin",
+    "runs/pretrain-30M-v1/shards/s05.bin",
+    "runs/pretrain-30M-v1/shards/s06.bin",
+    "runs/pretrain-30M-v1/shards/s07.bin",
+    "runs/pretrain-30M-v1/shards/s08.bin",
+    "runs/pretrain-30M-v1/shards/s09.bin",
+    "runs/pretrain-30M-v1/shards/s10.bin",
+    "runs/pretrain-30M-v1/shards/s11.bin"
+  ],
+  "trainSecsPerChunk": 3600,
+  "seqLen": 512,
+  "vocab": 50257,
+  "batchSize": 8,
+  "freshStart": true
+}

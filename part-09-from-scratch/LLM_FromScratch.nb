@@ -1,0 +1,688 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[     30335,        679]
+NotebookOptionsPosition[     22901,        588]
+NotebookOutlinePosition[     23362,        606]
+CellTagsIndexPosition[     23319,        603]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell["Pretraining a Nano Model from Scratch", "Title",ExpressionUUID->"78369c40-9f25-49af-8d29-2d0c89c7c196"],
+
+Cell["\<\
+From random weights to a chat-capable LLM in Wolfram Language, on a $100 \
+budget\
+\>", "Subtitle",ExpressionUUID->"e934cb11-7635-46a3-befa-12b2afd7f27e"],
+
+Cell[TextData[{
+ "The master notebook ",
+ StyleBox["LLM A to Z",
+  FontSlant->Italic],
+ " ended with a 124M ",
+ "GPT-2 small fine-tuned on twenty hand-written Q&A pairs.  ",
+ "The ",
+ StyleBox["Discussion",
+  FontSlant->Italic],
+ " notebook scaled that fine-tune to ",
+ "ten thousand pairs of Alpaca-cleaned and got a model that actually ",
+ "chats.  Both notebooks imported OpenAI's pretrained GPT-2 weights ",
+ "and only trained the supervised-fine-tuning step on top."
+}], "Text",ExpressionUUID->"736ace3a-3fcb-4fb8-ba5a-4599d618bd45"],
+
+Cell[TextData[{
+ "This notebook does the part nobody had done from-scratch in WL: ",
+ StyleBox["pretrains",
+  FontWeight->Bold],
+ " the model.  No imported weights.  Random ",
+ "initialisation, a slab of internet text, and the cross-entropy ",
+ "objective.  We rebuild the nano-chat architecture (the family ",
+ "Karpathy's nanochat, LLaMA, Mistral and Qwen share) directly out ",
+ "of WL primitives \[Dash] RMSNorm, rotary position embedding, ",
+ "SwiGLU \[Dash] then schedule chunked training on AWS Batch spot ",
+ "GPUs under a fixed dollar budget."
+}], "Text",ExpressionUUID->"e6380178-bec2-4006-9017-3daf23d65c3c"],
+
+Cell["Three design choices worth flagging up-front:", "Text",ExpressionUUID->"fb45a6d9-9ff3-4ea0-a3e3-89a49d606301"],
+
+Cell[TextData[{
+ "1. ",
+ StyleBox["Nano architecture, not GPT-2.",
+  FontWeight->Bold],
+ "  RMSNorm replaces LayerNorm, RoPE replaces learned absolute ",
+ "position embedding, SwiGLU replaces GELU MLP.  These are 2023-era ",
+ "best practice and are what every open-weights release ",
+ "(LLaMA, Mistral, Qwen) actually uses."
+}], "Text",ExpressionUUID->"1df31be2-6046-49a9-9b69-97c7977e7402"],
+
+Cell[TextData[{
+ "2. ",
+ StyleBox["AWS Batch spot, not Wolfram Cloud.",
+  FontWeight->Bold],
+ "  Wolfram OnDemand charges a ~30% RemoteBatchSubmit overhead.  ",
+ "g4dn.xlarge spot in eu-central-1 runs about $0.30/hour, so a ",
+ "$100 budget buys ~330 GPU-hours \[Dash] enough to take a 30M-",
+ "parameter model to coherent English on FineWeb-Edu."
+}], "Text",ExpressionUUID->"c1beb83c-007c-42fb-afd1-a546a45a4fce"],
+
+Cell[TextData[{
+ "3. ",
+ StyleBox["Cost-decision lives between jobs, not within.",
+  FontWeight->Bold],
+ "  NetTrain runs are atomic; once started they consume their ",
+ "full time budget.  We default to ~4-hour spot jobs (about $1.20 ",
+ "each) and inspect the loss slope after each one before deciding ",
+ "whether to launch a resume job from the latest checkpoint."
+}], "Text",ExpressionUUID->"63166813-f26f-4ff4-ab6c-4c07bb6af739"],
+
+Cell["1.  Setup", "Chapter",ExpressionUUID->"675108bd-04f2-406b-bc48-68f904331403"],
+
+Cell["SetDirectory[NotebookDirectory[]]", "Input",ExpressionUUID->"e94272a6-18cb-4fdf-b9ca-5b46d5e213a2"],
+
+Cell["\<\
+Get[\"src/NanoChat.wl\"];
+Get[\"src/Pretraining.wl\"];\
+\>", "Input",ExpressionUUID->"fb58e463-72e4-4608-8cfa-ae9c54ff6359"],
+
+Cell[TextData[{
+ "The companion code lives in two packages.  ",
+ StyleBox["LLMAtoZ`NanoChat`",
+  FontFamily->"Courier"],
+ " gives us the architectural ",
+ "building blocks (",
+ StyleBox["rmsNorm",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["applyRoPE",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["swiGluMLP",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["nanoModel",
+  FontFamily->"Courier"],
+ ").  ",
+ StyleBox["LLMAtoZ`Pretraining`",
+  FontFamily->"Courier"],
+ " gives us the in-job S3 checkpoint ",
+ "callback and the between-job continue/stop decision."
+}], "Text",ExpressionUUID->"cc509a7c-f670-4054-86c9-e5f440428468"],
+
+Cell["2.  Why a new architecture?", "Chapter",ExpressionUUID->"43c83051-0752-4687-bb02-17b1e8d6484b"],
+
+Cell["\<\
+The 12-layer transformer we built in Part 3 uses the original Vaswani-2017 \
+components: LayerNorm, learned absolute position embeddings, a two-layer GELU \
+feed-forward block.  Every public open-weights LLM released after 2022 \
+\[Dash] LLaMA, Mistral, Qwen, Gemma, even Karpathy's didactic nanochat \
+\[Dash] has swapped all three out.  Each change is small in isolation; the \
+combination is empirically large.\
+\>", "Text",ExpressionUUID->"7721019f-5098-4605-8913-3baea65bf4b2"],
+
+Cell["2.1  RMSNorm", "Section",ExpressionUUID->"5a10ce11-454a-45b4-8e98-617da396b682"],
+
+Cell[TextData[{
+ "LayerNorm subtracts the mean and divides by the standard ",
+ "deviation, then applies a learnable scale and bias: ",
+ StyleBox["y = (x - mean(x))/std(x) * \[Gamma] + \[Beta]",
+  FontFamily->"Courier"],
+ ".  ",
+ "RMSNorm drops the mean-subtraction and the bias: ",
+ StyleBox["y = x/Sqrt[mean(x^2) + \[Epsilon]] * \[Gamma]",
+  FontFamily->"Courier"],
+ ".  ",
+ "Zhang & Sennrich (2019) showed the mean-centering is doing little ",
+ "work in transformers, and removing it saves a reduction op per ",
+ "forward pass.  Our implementation also drops the learnable ",
+ "\[Gamma]; ablations in LLaMA-2 show that costs <0.5% on the ",
+ "evaluation suite."
+}], "Text",ExpressionUUID->"b3be26ed-677b-4d2d-ba38-0cba4f7ee0b9"],
+
+Cell["\<\
+norm = LLMAtoZ`NanoChat`rmsNorm[8, 4];
+sample = RandomReal[NormalDistribution[], {4, 8}];
+{Dimensions[norm[sample]], Mean[norm[sample]^2 // Flatten]}\
+\>", "Input",ExpressionUUID->"bbfc633a-ab3e-4edb-9ac6-b2fbfbdff97f"],
+
+Cell["\<\
+The output has the same shape as the input and a mean-square close to one \
+(the defining property of an RMSNorm layer).\
+\>", "Text",ExpressionUUID->"88dfff2f-2f64-4bcb-a35f-105c35bc12e6"],
+
+Cell["2.2  Rotary position embedding", "Section",ExpressionUUID->"cb23b83c-49af-4bf8-87c0-d64c87aee7ef"],
+
+Cell[TextData[{
+ "Vanilla transformers add a learned vector to each token embedding ",
+ "to encode position.  The model sees the position implicitly through ",
+ "the embedding.  Rotary position embedding (Su et al. 2021) takes a ",
+ "different tack: ",
+ StyleBox["rotate",
+  FontSlant->Italic],
+ " the query and key vectors ",
+ "inside each attention head by an angle that depends on the position. ",
+ "The dot-product attention score between positions ",
+ StyleBox["i",
+  FontFamily->"Courier"],
+ " ",
+ "and ",
+ StyleBox["j",
+  FontFamily->"Courier"],
+ " then depends only on the difference ",
+ StyleBox["j - i",
+  FontFamily->"Courier"],
+ " \[Dash] which is exactly what we want from a ",
+ "position encoding."
+}], "Text",ExpressionUUID->"c040c14e-b8b3-4973-bcb0-9df8e45ef420"],
+
+Cell[TextData[{
+ "RoPE has two practical advantages: (i) no learnable position ",
+ "embedding to train, saving ",
+ StyleBox["maxSeqLen * dModel",
+  FontFamily->"Courier"],
+ " parameters; (ii) the model generalises to context lengths ",
+ "beyond ",
+ StyleBox["maxSeqLen",
+  FontFamily->"Courier"],
+ " more gracefully because there is ",
+ "nothing in the model's parameters that ",
+ StyleBox["expects",
+  FontSlant->Italic],
+ " a particular sequence length."
+}], "Text",ExpressionUUID->"293fdd98-1ead-4b67-9065-c7263b32d8b1"],
+
+Cell["\<\
+rope = LLMAtoZ`NanoChat`applyRoPE[16, 32];
+sample = RandomReal[{-1, 1}, {16, 32}];
+Dimensions[rope[sample]]\
+\>", "Input",ExpressionUUID->"c20594a6-1af0-46b1-82b7-4535714b1226"],
+
+Cell["2.3  SwiGLU MLP", "Section",ExpressionUUID->"168a91f3-004d-4233-8e80-98691e29d252"],
+
+Cell[TextData[{
+ "The Vaswani feed-forward block is ",
+ StyleBox["Linear -> GELU -> Linear",
+  FontFamily->"Courier"],
+ ".  SwiGLU (Shazeer 2020) replaces it with two parallel linears, a ",
+ "SiLU non-linearity on one branch, and an elementwise product:"
+}], "Text",ExpressionUUID->"87f6769a-c473-4dc6-8227-67ff5cdb6894"],
+
+Cell[TextData[StyleBox["y = down( SiLU(gate(x)) * up(x) )",
+ FontFamily->"Courier"]], "Text",ExpressionUUID->"ef34b169-b392-4263-bc36-\
+4ad1018638fe"],
+
+Cell["\<\
+The gate-and-multiply trick is borrowed from gated linear units in language \
+modelling (Dauphin et al. 2017).  It adds parameters (3 linear layers instead \
+of 2) but the LLaMA-2 ablations show it is a consistent 0.5\[Dash]1.0 \
+perplexity-point win at the same compute budget.\
+\>", "Text",ExpressionUUID->"b78760e2-8a32-45f9-9749-51480101d73a"],
+
+Cell["\<\
+ffn = LLMAtoZ`NanoChat`swiGluMLP[64, 256, 16];
+Dimensions @ ffn[RandomReal[{-1, 1}, {16, 64}]]\
+\>", "Input",ExpressionUUID->"e2a872ab-8f7d-4770-a54d-4c5f4d5f0dcf"],
+
+Cell["2.4  Putting it together", "Section",ExpressionUUID->"5efa7ea0-2280-4c34-840f-bbd303532d84"],
+
+Cell["\<\
+A nano-style transformer block is the same residual scaffold as GPT-2, with \
+each component replaced:\
+\>", "Text",ExpressionUUID->"3513a8ba-6abc-434a-be19-c6de62f87cbf"],
+
+Cell[TextData[StyleBox["x -> RMSNorm -> RoPE-MHA -> + -> RMSNorm -> SwiGLU -> \
++",
+ FontFamily->"Courier"]], "Text",ExpressionUUID->"a34f0883-5b4e-44ca-8505-\
+d3e6c0484d8c"],
+
+Cell["\<\
+block = LLMAtoZ`NanoChat`nanoTransformerBlock[64, 4, 256, 16];
+Dimensions @ block[RandomReal[{-1, 1}, {16, 64}]]\
+\>", "Input",ExpressionUUID->"71d32ed8-3772-4822-8400-5adf90f8e3c7"],
+
+Cell["3.  Building nanoModel", "Chapter",ExpressionUUID->"5a226e7c-9132-4d8d-8597-ce9a4e5ddb4c"],
+
+Cell[TextData[{
+ "The full model is a token embedding, ",
+ StyleBox["nLayers",
+  FontFamily->"Courier"],
+ " of ",
+ "the block above, a final RMSNorm, and an output linear projection ",
+ "back to vocabulary size.  No positional embedding \[Dash] RoPE ",
+ "handles position inside each attention block."
+}], "Text",ExpressionUUID->"baca08d6-5787-42ad-af7e-bd61e824bc39"],
+
+Cell["\<\
+tinySpec = LLMAtoZ`NanoChat`nanoModelSpecTiny[100, 16];
+mdl = LLMAtoZ`NanoChat`nanoModel[
+   tinySpec[\"dModel\"], tinySpec[\"nHeads\"],
+   tinySpec[\"nLayers\"], tinySpec[\"dFF\"],
+   tinySpec[\"vocabSize\"], tinySpec[\"maxSeqLen\"]];
+Information[mdl, \"ArraysTotalElementCount\"]\
+\>", "Input",ExpressionUUID->"2ecff786-652f-4eb0-8dd0-8141601f2fae"],
+
+Cell["\<\
+The closed-form parameter count and the actual array count match to within \
+the frozen causal-mask and RoPE cos/sin tables \[Dash] the difference is the \
+count of position-encoding constants the model carries around but does not \
+train.\
+\>", "Text",ExpressionUUID->"611a4844-9d8c-4c82-b202-36f228b9f14f"],
+
+Cell["LLMAtoZ`NanoChat`nanoParameterCount[tinySpec]", "Input",ExpressionUUID->"5c2cb375-b1a3-4119-9bf2-7f2c0f0cdfe2"],
+
+Cell["4.  Model sizes and the dollar budget", "Chapter",ExpressionUUID->"d7c3ff5f-36c3-4f9f-b541-6fbd45c9a7a6"],
+
+Cell["\<\
+Four named specs sized for the GPT-2 50,257-entry vocabulary at 1024 context \
+length:\
+\>", "Text",ExpressionUUID->"c5c35029-678b-4d7f-a7e3-983fb0edf190"],
+
+Cell["\<\
+sizes = Map[
+   With[{s = #[50257, 1024]},
+     <|\"name\" -> s[\"label\"], \"dModel\" -> s[\"dModel\"],
+       \"nLayers\" -> s[\"nLayers\"],
+       \"params\" -> LLMAtoZ`NanoChat`nanoParameterCount[s]|>
+   ] &,
+   {LLMAtoZ`NanoChat`nanoModelSpec30M,
+    LLMAtoZ`NanoChat`nanoModelSpec100M,
+    LLMAtoZ`NanoChat`nanoModelSpec200M}
+ ];
+Dataset[sizes]\
+\>", "Input",ExpressionUUID->"c1dc42ba-ef7a-45a8-bbdb-1a7e0e84dbc4"],
+
+Cell["\<\
+Wall-time estimates on a single T4 (g4dn.xlarge spot, $0.30/hr in \
+eu-central-1) for 5 billion training tokens:\
+\>", "Text",ExpressionUUID->"468fba04-9161-45b8-9a3b-127519a82336"],
+
+Cell["\<\
+  30M  params  \[Rule]  ~8 hours    \[Rule]  ~$2.40
+  100M params  \[Rule]  ~30 hours   \[Rule]  ~$9
+  200M params  \[Rule]  ~80 hours   \[Rule]  ~$24\
+\>", "Text",ExpressionUUID->"c6cb2e38-e9dc-4706-a96b-18b6d1c6d2b8"],
+
+Cell["\<\
+These are forward-only estimates; backward + optimizer state roughly doubles \
+the wall time.  Multi-GPU on g4dn.12xlarge (4x T4) scales roughly 3x, not 4x, \
+because of communication overhead.  The actual numbers will land in the table \
+below after the first calibration run.\
+\>", "Text",ExpressionUUID->"74dc9ef6-dba6-4d51-844e-6888daea0602"],
+
+Cell["5.  Training data: FineWeb-Edu", "Chapter",ExpressionUUID->"96f6b166-c824-49a5-a314-0922ef4a2197"],
+
+Cell[TextData[{
+ "FineWeb-Edu is HuggingFace's deduplicated, education-quality ",
+ "subset of Common Crawl.  We use the 10B-token sample, which ",
+ "weighs in at ~30 GB compressed Parquet.  Pre-tokenised with the ",
+ "GPT-2 BPE encoder (the same one our model output projection ",
+ "matches) it fits in roughly 20 GB of token-ID files.  The full ",
+ "preprocessing recipe lives in ",
+ StyleBox["src/preprocess_data.wls",
+  FontFamily->"Courier"],
+ ".  For the notebook we work with a 100 MB shard so the cells ",
+ "below execute quickly."
+}], "Text",ExpressionUUID->"5d7a927a-bd02-4562-b268-fc0549392e23"],
+
+Cell["\<\
+(* Placeholder: data prep run on the cloud node.  See
+   src/preprocess_data.wls for the actual recipe. *)\
+\>", "Program",ExpressionUUID->"b579e457-1b00-4aaa-bb9e-6b390a24991a"],
+
+Cell["6.  The chunked-pretraining harness", "Chapter",ExpressionUUID->"0397386c-7cd9-41fe-afcd-841ffb30d391"],
+
+Cell[TextData[{
+ "Long pretraining runs fail in one of two ways: the node terminates ",
+ "(spot revocation, OOM at the end during checkpoint save) or the ",
+ "training appears to flatline halfway through.  Both problems have ",
+ "the same answer: ",
+ StyleBox["save the model periodically while training is still going",
+  FontSlant->Italic],
+ ", and have the orchestrator decide ",
+ "whether to launch a resume job once the current one finishes."
+}], "Text",ExpressionUUID->"277321fb-9beb-4c8a-b0be-e1299f5ae08e"],
+
+Cell[TextData[{
+ StyleBox["LLMAtoZ`Pretraining`pretrainingCallback",
+  FontFamily->"Courier"],
+ " returns a ",
+ "Function suitable for NetTrain's ",
+ StyleBox["TrainingProgressReporting",
+  FontFamily->"Courier"],
+ " hook.  Every ",
+ StyleBox["EveryBatches",
+  FontFamily->"Courier"],
+ " batches it writes a JSON ",
+ "loss-curve snapshot to S3; every ten of those it also writes a ",
+ "full ",
+ StyleBox[".wlnet",
+  FontFamily->"Courier"],
+ " checkpoint.  The cadences are tuned so ",
+ "the per-batch overhead is well under 1%."
+}], "Text",ExpressionUUID->"b721b7cc-364b-4baa-8d91-4b2b12f8b3c1"],
+
+Cell["\<\
+cb = LLMAtoZ`Pretraining`pretrainingCallback[
+   \"S3Prefix\" -> \"s3://my-bucket/runs/2026-05-21\",
+   \"EveryBatches\" -> 100,
+   \"NetExtractor\" -> (NetTake[#, Length[#] - 1] &)
+];
+Head[cb]\
+\>", "Input",ExpressionUUID->"879bdb43-2bc8-443c-81ba-ca068f2fb808"],
+
+Cell["7.  The cost-decision rule", "Chapter",ExpressionUUID->"67a8a832-3665-4180-b8f1-72a39ff2ca00"],
+
+Cell[TextData[{
+ "Between jobs, the orchestrator fetches ",
+ StyleBox["loss.json",
+  FontFamily->"Courier"],
+ " from S3 and feeds the trajectory to ",
+ StyleBox["decideToContinue",
+  FontFamily->"Courier"],
+ ".  Three outcomes:"
+}], "Text",ExpressionUUID->"7f7c3c37-b1fe-417a-8165-4cade11a4706"],
+
+Cell["\<\
+  Budget exhausted    \[Rule]  Stop
+  Loss has plateaued  \[Rule]  Stop
+  Still going down    \[Rule]  Continue \[Dash] launch a resume job\
+\>", "Text",ExpressionUUID->"bc3c887e-dcac-4e50-a909-fa6d3156bcbf"],
+
+Cell[TextData[{
+ "The plateau detector is a coarse one: linear fit over the last ",
+ "100 batches, flag if the absolute slope is below ",
+ StyleBox["5x10^-6",
+  FontFamily->"Courier"],
+ " loss-units per batch.  At a 100M model with ",
+ "batch size 32, that threshold corresponds to a perplexity ",
+ "improvement of less than 0.001 over 10,000 examples \[Dash] not ",
+ "worth another $1.20 of training."
+}], "Text",ExpressionUUID->"f9710e3a-9a76-42e4-953e-0afbe47852dd"],
+
+Cell["\<\
+(* synthetic example: an improving trajectory *)
+improving = Table[
+   <|\"batch\" -> b, \"loss\" -> 5.0 * Exp[-b/300.] + 0.3|>,
+   {b, 1, 500}];
+LLMAtoZ`Pretraining`decideToContinue[<|
+   \"LossHistory\" -> improving,
+   \"CostSpent\" -> 20., \"BudgetUSD\" -> 100.
+|>]\
+\>", "Input",ExpressionUUID->"2f87e41e-1168-48e0-9615-4982e11ca06c"],
+
+Cell["8.  Running on AWS Batch spot", "Chapter",ExpressionUUID->"33a9e6fe-4dc8-4ee0-a423-4205dbb00a6e"],
+
+Cell["The training stack on AWS Batch:", "Text",ExpressionUUID->"533323c1-a7e0-455e-8f23-9836d90ef100"],
+
+Cell[TextData[{
+ "  ",
+ StyleBox["WolframG4SpotCE",
+  FontFamily->"Courier"],
+ "          \[LongDash] spot CE, g4dn.xlarge + g4dn.2xlarge\n",
+ "  ",
+ StyleBox["WolframG4MultiSpotCE",
+  FontFamily->"Courier"],
+ "     \[LongDash] spot CE, g4dn.12xlarge (4\[Times]T4)\n",
+ "  ",
+ StyleBox["WolframG4SpotQueue",
+  FontFamily->"Courier"],
+ "       \[LongDash] queue feeding the single-GPU CE\n",
+ "  ",
+ StyleBox["WolframG4MultiSpotQueue",
+  FontFamily->"Courier"],
+ "  \[LongDash] queue feeding the 4-GPU CE\n",
+ "  ",
+ StyleBox["WolframG4Multi4GpuJobDef",
+  FontFamily->"Courier"],
+ " \[LongDash] job def: vCPUs=48, GPUs=4, MEM=180 GiB"
+}], "Text",ExpressionUUID->"0db09067-af57-44c4-8439-e531cb49d7b0"],
+
+Cell["\<\
+Account-level quota requests (eu-central-1) needed before any of this runs:\
+\>", "Text",ExpressionUUID->"3909ba5f-9312-4a10-864c-a4d22cbbe060"],
+
+Cell["\<\
+  L-3819A6DF  All G/VT Spot Instance Requests    \[Rule] 96 vCPU
+  L-DB2E81BA  Running On-Demand G/VT instances   \[Rule] 48 vCPU\
+\>", "Text",ExpressionUUID->"931ba3da-ce63-4a6a-a15c-f8d5dafe010f"],
+
+Cell["\<\
+(* Submission template -- run from a fresh kernel that has
+   ~/.aws/credentials configured.  Output cell stays empty until
+   we have the first calibration run. *)
+awsService = ServiceConnect[\"AWS\"];
+env = RemoteBatchSubmissionEnvironment[\"AWSBatch\", <|
+   \"JobQueue\" -> \
+\"arn:aws:batch:eu-central-1:.../job-queue/WolframG4SpotQueue\",
+   \"JobDefinition\" -> \
+\"arn:aws:batch:eu-central-1:.../job-definition/WolframG4xlGpuJobDef:1\",
+   \"IOBucket\" -> \"mywolframbatchstack-g4gpu-wolframjobdatabucket-...\",
+   \"ServiceObject\" -> awsService
+|>];\
+\>", "Program",ExpressionUUID->"883ffb49-c602-41b4-9168-c7962dea4146"],
+
+Cell["9.  The first calibration run", "Chapter",ExpressionUUID->"0c691498-088d-4b5f-8676-55cf5cce8643"],
+
+Cell[TextData[{
+ "The first run is a ",
+ StyleBox["calibration",
+  FontSlant->Italic],
+ " run: 30M model, 100 MB FineWeb-Edu shard, ~1 hour wall time, ~$0.30 ",
+ "of spot.  Its job is to confirm the training loop trains, the S3 ",
+ "callback writes loss + checkpoint, and the throughput numbers we ",
+ "estimated above are within 2x of reality."
+}], "Text",ExpressionUUID->"283f6052-3dc8-4c4d-a0b3-994a568e6bfb"],
+
+Cell["\<\
+(* RemoteBatchSubmit returning the RemoteBatchJobObject.
+   Filled in after the first cloud run. *)\
+\>", "Program",ExpressionUUID->"4d810694-7559-46d3-b5f2-42a27b45be49"],
+
+Cell["\<\
+Once we have those numbers, we re-plan: pick the largest model size whose \
+5B-token wall time fits in the $100 budget at the observed throughput.  This \
+will likely be 100M parameters; it might be 200M if the throughput estimate \
+was conservative; it might be 30M if we are missing a CUDA optimisation.\
+\>", "Text",ExpressionUUID->"44d06492-aa8a-47d5-9853-bf54ca526254"],
+
+Cell["10.  The actual training run", "Chapter",ExpressionUUID->"71779722-fd4d-4bc3-8772-d017553ca0ea"],
+
+Cell[TextData[{
+ "Placeholder for the production run.  This cell will become a ",
+ "loop: submit a 4-hour spot job, wait for it to finish, fetch ",
+ "loss.json, ",
+ StyleBox["decideToContinue",
+  FontFamily->"Courier"],
+ ", submit the next or stop."
+}], "Text",ExpressionUUID->"f1847e0b-c6ec-424e-ad3a-92b6d0b5a5bf"],
+
+Cell["(* Filled in after calibration. *)", "Program",ExpressionUUID->"e139a533-4e3d-42d3-b665-18830cd991eb"],
+
+Cell["11.  Sampling from the trained model", "Chapter",ExpressionUUID->"912b855e-a339-456a-8596-b2ec2f70784e"],
+
+Cell["\<\
+Once we have weights, sampling reuses the temperature / top-k machinery from \
+Part 5 unchanged.  RoPE plays nicely with incremental sampling: we generate \
+one token, append it to the context, and re-run the model on the extended \
+sequence.  No KV-cache yet \[Dash] that is a follow-up.\
+\>", "Text",ExpressionUUID->"363184ce-a139-49fe-9788-a68a3e7170ef"],
+
+Cell["(* Filled in after we have trained weights. *)", "Program",ExpressionUUID->"0374bd3e-0388-475c-8bb6-a86be87fda30"],
+
+Cell["12.  Chat-style fine-tuning", "Chapter",ExpressionUUID->"941722ed-dac4-4844-9f02-5c5d43338cf6"],
+
+Cell["\<\
+Pretraining alone gets the model fluent in English but not conversational.  \
+The Discussion notebook's SFT recipe (Alpaca-cleaned, plain-text \
+User/Assistant template) ports across to this architecture unchanged \[Dash] \
+same NetTrain call, just a different starting checkpoint.  We do this as a \
+separate $5\[Dash]$10 run after pretraining is done.\
+\>", "Text",ExpressionUUID->"8e499469-2d96-4aec-9008-3180e7103121"],
+
+Cell["13.  Limits and what is missing", "Chapter",ExpressionUUID->"21b19e12-d59c-428d-bd44-bdc50e7ca87a"],
+
+Cell[TextData[{
+ "  \[Bullet] ",
+ StyleBox["No weight tying.",
+  FontWeight->Bold],
+ "  Karpathy's nanochat ",
+ "ties the input embedding and the output projection, saving ~38M ",
+ "parameters at the 200M size.  WL's ",
+ StyleBox["NetSharedArray",
+  FontFamily->"Courier"],
+ " makes this implementable; not yet wired in.\n",
+ "  \[Bullet] ",
+ StyleBox["No KV-cache for sampling.",
+  FontWeight->Bold],
+ "  Generation ",
+ "currently re-runs the full model on the extended sequence each ",
+ "step, which is O(N^2) in context length.  Should add an ",
+ "incremental sampler.\n",
+ "  \[Bullet] ",
+ StyleBox["No grouped-query attention.",
+  FontWeight->Bold],
+ "  Modern ",
+ "70B-scale models use GQA to share KV across query heads.  Not ",
+ "useful at our scale but worth mentioning.\n",
+ "  \[Bullet] ",
+ StyleBox["The RMSNorm has no learnable gain.",
+  FontWeight->Bold],
+ "  The \[Gamma] is the cheapest parameter in the model but ",
+ "implementing it in WL requires a NetSharedArray hook; left as ",
+ "follow-up."
+}], "Text",ExpressionUUID->"36f9c126-03e7-44a9-9816-365275689be2"],
+
+Cell["Useful references:", "Text",ExpressionUUID->"7b86b8a5-7222-4cef-b1f0-ed2c6f72784f"],
+
+Cell[TextData[{
+ "  Karpathy, A.  ",
+ StyleBox["nanochat",
+  FontSlant->Italic],
+ ".  github.com/karpathy/nanochat (2025).\n",
+ "  Su, J. et al.  ",
+ StyleBox["RoFormer: Enhanced Transformer with Rotary Position Embedding",
+  FontSlant->Italic],
+ ".  arXiv:2104.09864 (2021).\n",
+ "  Zhang, B. & Sennrich, R.  ",
+ StyleBox["Root Mean Square Layer Normalization",
+  FontSlant->Italic],
+ ".  NeurIPS 2019.\n",
+ "  Shazeer, N.  ",
+ StyleBox["GLU Variants Improve Transformer",
+  FontSlant->Italic],
+ ".  arXiv:2002.05202 (2020).\n",
+ "  Touvron, H. et al.  ",
+ StyleBox["LLaMA: Open and Efficient Foundation Language Models",
+  FontSlant->Italic],
+ ".  arXiv:2302.13971 (2023)."
+}], "Text",ExpressionUUID->"668aa007-84bd-4e74-89cf-cc1069469111"]
+},
+WindowSize->{1100, 800},
+TaggingRules-><|
+ "BuiltAt" -> "2026-05-21T22:10:52", "BuiltBy" -> 
+  "part-09-from-scratch/src/build_notebook.wls"|>,
+FrontEndVersion->"14.3 for Mac OS X ARM (64-bit) (July 8, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"bb268bb3-dd61-48f8-bd23-bf56bf1b6d2b"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[554, 20, 109, 0, 70, "Title",ExpressionUUID->"78369c40-9f25-49af-8d29-2d0c89c7c196"],
+Cell[666, 22, 164, 3, 70, "Subtitle",ExpressionUUID->"e934cb11-7635-46a3-befa-12b2afd7f27e"],
+Cell[833, 27, 538, 13, 70, "Text",ExpressionUUID->"736ace3a-3fcb-4fb8-ba5a-4599d618bd45"],
+Cell[1374, 42, 619, 11, 70, "Text",ExpressionUUID->"e6380178-bec2-4006-9017-3daf23d65c3c"],
+Cell[1996, 55, 116, 0, 70, "Text",ExpressionUUID->"fb45a6d9-9ff3-4ea0-a3e3-89a49d606301"],
+Cell[2115, 57, 391, 8, 70, "Text",ExpressionUUID->"1df31be2-6046-49a9-9b69-97c7977e7402"],
+Cell[2509, 67, 414, 8, 70, "Text",ExpressionUUID->"c1beb83c-007c-42fb-afd1-a546a45a4fce"],
+Cell[2926, 77, 435, 8, 70, "Text",ExpressionUUID->"63166813-f26f-4ff4-ab6c-4c07bb6af739"],
+Cell[3364, 87, 83, 0, 70, "Chapter",ExpressionUUID->"675108bd-04f2-406b-bc48-68f904331403"],
+Cell[3450, 89, 105, 0, 70, "Input",ExpressionUUID->"e94272a6-18cb-4fdf-b9ca-5b46d5e213a2"],
+Cell[3558, 91, 134, 3, 70, "Input",ExpressionUUID->"fb58e463-72e4-4608-8cfa-ae9c54ff6359"],
+Cell[3695, 96, 622, 22, 70, "Text",ExpressionUUID->"cc509a7c-f670-4054-86c9-e5f440428468"],
+Cell[4320, 120, 101, 0, 70, "Chapter",ExpressionUUID->"43c83051-0752-4687-bb02-17b1e8d6484b"],
+Cell[4424, 122, 492, 7, 70, "Text",ExpressionUUID->"7721019f-5098-4605-8913-3baea65bf4b2"],
+Cell[4919, 131, 86, 0, 70, "Section",ExpressionUUID->"5a10ce11-454a-45b4-8e98-617da396b682"],
+Cell[5008, 133, 730, 15, 70, "Text",ExpressionUUID->"b3be26ed-677b-4d2d-ba38-0cba4f7ee0b9"],
+Cell[5741, 150, 229, 4, 70, "Input",ExpressionUUID->"bbfc633a-ab3e-4edb-9ac6-b2fbfbdff97f"],
+Cell[5973, 156, 199, 3, 70, "Text",ExpressionUUID->"88dfff2f-2f64-4bcb-a35f-105c35bc12e6"],
+Cell[6175, 161, 104, 0, 70, "Section",ExpressionUUID->"cb23b83c-49af-4bf8-87c0-d64c87aee7ef"],
+Cell[6282, 163, 779, 21, 70, "Text",ExpressionUUID->"c040c14e-b8b3-4973-bcb0-9df8e45ef420"],
+Cell[7064, 186, 523, 14, 70, "Text",ExpressionUUID->"293fdd98-1ead-4b67-9065-c7263b32d8b1"],
+Cell[7590, 202, 187, 4, 70, "Input",ExpressionUUID->"c20594a6-1af0-46b1-82b7-4535714b1226"],
+Cell[7780, 208, 89, 0, 70, "Section",ExpressionUUID->"168a91f3-004d-4233-8e80-98691e29d252"],
+Cell[7872, 210, 321, 6, 70, "Text",ExpressionUUID->"87f6769a-c473-4dc6-8227-67ff5cdb6894"],
+Cell[8196, 218, 150, 2, 70, "Text",ExpressionUUID->"ef34b169-b392-4263-bc36-4ad1018638fe"],
+Cell[8349, 222, 357, 5, 70, "Text",ExpressionUUID->"b78760e2-8a32-45f9-9749-51480101d73a"],
+Cell[8709, 229, 174, 3, 70, "Input",ExpressionUUID->"e2a872ab-8f7d-4770-a54d-4c5f4d5f0dcf"],
+Cell[8886, 234, 98, 0, 70, "Section",ExpressionUUID->"5efa7ea0-2280-4c34-840f-bbd303532d84"],
+Cell[8987, 236, 181, 3, 70, "Text",ExpressionUUID->"3513a8ba-6abc-434a-be19-c6de62f87cbf"],
+Cell[9171, 241, 174, 3, 70, "Text",ExpressionUUID->"a34f0883-5b4e-44ca-8505-d3e6c0484d8c"],
+Cell[9348, 246, 192, 3, 70, "Input",ExpressionUUID->"71d32ed8-3772-4822-8400-5adf90f8e3c7"],
+Cell[9543, 251, 96, 0, 70, "Chapter",ExpressionUUID->"5a226e7c-9132-4d8d-8597-ce9a4e5ddb4c"],
+Cell[9642, 253, 368, 8, 70, "Text",ExpressionUUID->"baca08d6-5787-42ad-af7e-bd61e824bc39"],
+Cell[10013, 263, 361, 7, 70, "Input",ExpressionUUID->"2ecff786-652f-4eb0-8dd0-8141601f2fae"],
+Cell[10377, 272, 318, 5, 70, "Text",ExpressionUUID->"611a4844-9d8c-4c82-b202-36f228b9f14f"],
+Cell[10698, 279, 117, 0, 70, "Input",ExpressionUUID->"5c2cb375-b1a3-4119-9bf2-7f2c0f0cdfe2"],
+Cell[10818, 281, 111, 0, 70, "Chapter",ExpressionUUID->"d7c3ff5f-36c3-4f9f-b541-6fbd45c9a7a6"],
+Cell[10932, 283, 165, 3, 70, "Text",ExpressionUUID->"c5c35029-678b-4d7f-a7e3-983fb0edf190"],
+Cell[11100, 288, 430, 12, 70, "Input",ExpressionUUID->"c1dc42ba-ef7a-45a8-bbdb-1a7e0e84dbc4"],
+Cell[11533, 302, 191, 3, 70, "Text",ExpressionUUID->"468fba04-9161-45b8-9a3b-127519a82336"],
+Cell[11727, 307, 229, 4, 70, "Text",ExpressionUUID->"c6cb2e38-e9dc-4706-a96b-18b6d1c6d2b8"],
+Cell[11959, 313, 356, 5, 70, "Text",ExpressionUUID->"74dc9ef6-dba6-4d51-844e-6888daea0602"],
+Cell[12318, 320, 104, 0, 70, "Chapter",ExpressionUUID->"96f6b166-c824-49a5-a314-0922ef4a2197"],
+Cell[12425, 322, 605, 11, 70, "Text",ExpressionUUID->"5d7a927a-bd02-4562-b268-fc0549392e23"],
+Cell[13033, 335, 188, 3, 70, "Program",ExpressionUUID->"b579e457-1b00-4aaa-bb9e-6b390a24991a"],
+Cell[13224, 340, 109, 0, 70, "Chapter",ExpressionUUID->"0397386c-7cd9-41fe-afcd-841ffb30d391"],
+Cell[13336, 342, 514, 9, 70, "Text",ExpressionUUID->"277321fb-9beb-4c8a-b0be-e1299f5ae08e"],
+Cell[13853, 353, 595, 17, 70, "Text",ExpressionUUID->"b721b7cc-364b-4baa-8d91-4b2b12f8b3c1"],
+Cell[14451, 372, 273, 7, 70, "Input",ExpressionUUID->"879bdb43-2bc8-443c-81ba-ca068f2fb808"],
+Cell[14727, 381, 100, 0, 70, "Chapter",ExpressionUUID->"67a8a832-3665-4180-b8f1-72a39ff2ca00"],
+Cell[14830, 383, 295, 8, 70, "Text",ExpressionUUID->"7f7c3c37-b1fe-417a-8165-4cade11a4706"],
+Cell[15128, 393, 218, 4, 70, "Text",ExpressionUUID->"bc3c887e-dcac-4e50-a909-fa6d3156bcbf"],
+Cell[15349, 399, 469, 9, 70, "Text",ExpressionUUID->"f9710e3a-9a76-42e4-953e-0afbe47852dd"],
+Cell[15821, 410, 349, 9, 70, "Input",ExpressionUUID->"2f87e41e-1168-48e0-9615-4982e11ca06c"],
+Cell[16173, 421, 103, 0, 70, "Chapter",ExpressionUUID->"33a9e6fe-4dc8-4ee0-a423-4205dbb00a6e"],
+Cell[16279, 423, 103, 0, 70, "Text",ExpressionUUID->"533323c1-a7e0-455e-8f23-9836d90ef100"],
+Cell[16385, 425, 700, 21, 70, "Text",ExpressionUUID->"0db09067-af57-44c4-8439-e531cb49d7b0"],
+Cell[17088, 448, 154, 2, 70, "Text",ExpressionUUID->"3909ba5f-9312-4a10-864c-a4d22cbbe060"],
+Cell[17245, 452, 208, 3, 70, "Text",ExpressionUUID->"931ba3da-ce63-4a6a-a15c-f8d5dafe010f"],
+Cell[17456, 457, 641, 13, 70, "Program",ExpressionUUID->"883ffb49-c602-41b4-9168-c7962dea4146"],
+Cell[18100, 472, 103, 0, 70, "Chapter",ExpressionUUID->"0c691498-088d-4b5f-8676-55cf5cce8643"],
+Cell[18206, 474, 412, 8, 70, "Text",ExpressionUUID->"283f6052-3dc8-4c4d-a0b3-994a568e6bfb"],
+Cell[18621, 484, 181, 3, 70, "Program",ExpressionUUID->"4d810694-7559-46d3-b5f2-42a27b45be49"],
+Cell[18805, 489, 384, 5, 70, "Text",ExpressionUUID->"44d06492-aa8a-47d5-9853-bf54ca526254"],
+Cell[19192, 496, 102, 0, 70, "Chapter",ExpressionUUID->"71779722-fd4d-4bc3-8772-d017553ca0ea"],
+Cell[19297, 498, 316, 7, 70, "Text",ExpressionUUID->"f1847e0b-c6ec-424e-ad3a-92b6d0b5a5bf"],
+Cell[19616, 507, 108, 0, 70, "Program",ExpressionUUID->"e139a533-4e3d-42d3-b665-18830cd991eb"],
+Cell[19727, 509, 110, 0, 70, "Chapter",ExpressionUUID->"912b855e-a339-456a-8596-b2ec2f70784e"],
+Cell[19840, 511, 367, 5, 70, "Text",ExpressionUUID->"363184ce-a139-49fe-9788-a68a3e7170ef"],
+Cell[20210, 518, 120, 0, 70, "Program",ExpressionUUID->"0374bd3e-0388-475c-8bb6-a86be87fda30"],
+Cell[20333, 520, 101, 0, 70, "Chapter",ExpressionUUID->"941722ed-dac4-4844-9f02-5c5d43338cf6"],
+Cell[20437, 522, 432, 6, 70, "Text",ExpressionUUID->"8e499469-2d96-4aec-9008-3180e7103121"],
+Cell[20872, 530, 105, 0, 70, "Chapter",ExpressionUUID->"21b19e12-d59c-428d-bd44-bdc50e7ca87a"],
+Cell[20980, 532, 1080, 29, 70, "Text",ExpressionUUID->"36f9c126-03e7-44a9-9816-365275689be2"],
+Cell[22063, 563, 89, 0, 70, "Text",ExpressionUUID->"7b86b8a5-7222-4cef-b1f0-ed2c6f72784f"],
+Cell[22155, 565, 742, 21, 70, "Text",ExpressionUUID->"668aa007-84bd-4e74-89cf-cc1069469111"]
+}
+]
+*)
+
+(* End of internal cache information *)

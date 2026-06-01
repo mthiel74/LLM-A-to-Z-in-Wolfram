@@ -1,0 +1,252 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[     10412,        243]
+NotebookOptionsPosition[      7964,        206]
+NotebookOutlinePosition[      8321,        222]
+CellTagsIndexPosition[      8278,        219]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell["\<\
+Build a Large Language Model from Scratch \[LongDash] in Wolfram Language\
+\>", "Title",ExpressionUUID->"c92a9806-1132-47e7-81c8-7394b43ce96a"],
+
+Cell["Part 7: Reinforcement learning post-training (GRPO)", "Subtitle",ExpressionUUID->"8b7491fe-b421-4a9e-b977-ddda155b1ad4"],
+
+Cell[TextData[{
+ "Supervised fine-tuning in Part 6 made the model do question-and-",
+ "answer. RL post-training is the next step: take the SFT model, sample ",
+ "completions on a task with a verifiable reward, and update the policy ",
+ "to make high-reward completions more likely. Following nanochat, we ",
+ "use ",
+ StyleBox["GRPO",
+  FontWeight->Bold],
+ " in its simplest form \[LongDash] no reference model, no KL term, ",
+ "centered advantages over a group of rollouts."
+}], "Text",ExpressionUUID->"9e0fc5eb-1511-43a8-9926-0f2a790c071b"],
+
+Cell["1.  Setup", "Section",ExpressionUUID->"e5700cae-abd3-48c7-bedd-751c4213d78e"],
+
+Cell["SetDirectory[NotebookDirectory[]]", "Input",ExpressionUUID->"15aa198b-cdc8-45cc-bb78-d739b83d5068"],
+
+Cell["\<\
+Get[\"../../part-01-tokeniser-and-embeddings/src/Tokeniser.wl\"]
+Get[\"../../part-02-self-attention/src/Attention.wl\"]
+Get[\"../../part-03-transformer-block/src/Transformer.wl\"]
+Get[\"../../part-04-pretraining/src/Training.wl\"]
+Get[\"../../part-05-sampling/src/Sampling.wl\"]
+Get[\"src/RL.wl\"]\
+\>", "Input",ExpressionUUID->"a9d36d3f-6721-40c5-9d2e-de87f0648d07"],
+
+Cell["2.  The GRPO recipe in five lines", "Section",ExpressionUUID->"14b74f2b-fbb8-4d11-8569-130849958b12"],
+
+Cell["Per training step, given a prompt:", "Text",ExpressionUUID->"2632289c-1981-4657-a7f4-824a46b98637"],
+
+Cell[TextData[{
+ "1. ",
+ StyleBox["Sample",
+  FontWeight->Bold],
+ " ",
+ Cell[BoxData["K"], "Text",
+  FontSize->14,ExpressionUUID->"99978ee6-40a8-49e3-bf00-168735e9886f"],
+ " rollouts at temperature ",
+ Cell[BoxData["T"], "Text",
+  FontSize->14,ExpressionUUID->"88abe9cf-c426-4a22-8281-9f4e72daddda"],
+ " from the current policy.\n",
+ "2. ",
+ StyleBox["Score",
+  FontWeight->Bold],
+ " each rollout with a reward function ",
+ Cell[BoxData["R"], "Text",
+  FontSize->14,ExpressionUUID->"8d5dc66c-6174-490d-a886-15f9a80d68e0"],
+ " (binary for verifiable tasks).\n",
+ "3. ",
+ StyleBox["Center",
+  FontWeight->Bold],
+ " the rewards: advantages = rewards \[LongDash] mean(rewards).\n",
+ "4. ",
+ StyleBox["Compute",
+  FontWeight->Bold],
+ " policy-gradient loss ",
+ Cell[BoxData[
+  RowBox[{"L", "=", "-", "\[Sum]"}]], "Text",
+  FontSize->14,ExpressionUUID->"9ab6288b-2c39-45b0-be78-f32a2e768339"],
+ " advantage_i \[CenterDot] log p_\[Theta](rollout_i).\n",
+ "5. ",
+ StyleBox["Step",
+  FontWeight->Bold],
+ " ADAM on L."
+}], "Text",ExpressionUUID->"7ee447d0-f73b-4613-b09e-7c2b2065d5f3"],
+
+Cell["\<\
+What's deliberately absent: no reference model, no KL divergence, no value \
+head, no importance-weighting. The reward IS the ground truth, the variance \
+across the K rollouts IS the advantage signal. It is shocking how simple this \
+is once you accept that you don't need PPO's machinery for tasks with \
+verifiable correctness.\
+\>", "Text",ExpressionUUID->"c9b047dd-d620-45f4-9f7e-f2a3c876cbc4"],
+
+Cell["3.  A verifiable toy task: end with <|eot|>", "Section",ExpressionUUID->"429d5750-985e-4991-9a4f-6b029df9fbf5"],
+
+Cell[TextData[{
+ "For the educational demo we use the trivial task ",
+ StyleBox["\"end your continuation with the <|eot|> token within k tokens\"",
+  FontSlant->Italic],
+ ". Binary reward: 1.0 if the rollout contains <|eot|>, else 0.0. ",
+ "Small models post-trained from random init learn to do this in a few ",
+ "minutes of CPU time, while preserving all the GRPO bookkeeping that ",
+ "scales to real verifiable tasks (GSM8K, code, format-following)."
+}], "Text",ExpressionUUID->"49847268-ceca-4f81-abb3-1b4114e2e86b"],
+
+Cell["4.  One full GRPO step, walked through", "Section",ExpressionUUID->"10797c72-1ec5-4f3c-865f-ac745f22cbb8"],
+
+Cell["\<\
+(* Pretend we have the SFT model from Part 6.  For the demo we
+     just use a fresh small model so the notebook runs standalone. *)
+SeedRandom[1];
+bpe = Import[\"../../part-01-tokeniser-and-embeddings/data/bpe_trained.mx\"];
+baseVocab = LLMAtoZ`Tokeniser`buildBPEVocabulary[bpe];
+chatVocab = Join[baseVocab, {\"<|user|>\", \"<|assistant|>\", \"<|eot|>\"}];
+tokId = AssociationThread[chatVocab -> Range[Length[chatVocab]]];
+net = LLMAtoZ`Transformer`gptModel[64, 4, 2, 128, Length[chatVocab], 64];\
+\>", "Input",ExpressionUUID->"8ccb77f5-2d27-417c-8495-44b73924c9da"],
+
+Cell["\<\
+promptIds = Lookup[tokId,
+  LLMAtoZ`Tokeniser`bpeEncode[\"ROMEO:\", bpe[\"MergeRules\"]]];
+rollouts = LLMAtoZ`RL`rolloutBatch[net, promptIds, 8, 24, 64, 1.0];
+rewards = Map[LLMAtoZ`RL`rewardEot[#, tokId[\"<|eot|>\"]] &, rollouts];
+{Length[rollouts], rewards}\
+\>", "Input",ExpressionUUID->"d12bd5ff-f2e2-40bf-bf5c-b58d2f0e2d76"],
+
+Cell["\<\
+advantages = LLMAtoZ`RL`centerAdvantages[rewards];
+advantages\
+\>", "Input",ExpressionUUID->"395a5cad-1383-4cf6-bad0-0216af918346"],
+
+Cell["5.  Run a small GRPO epoch", "Section",ExpressionUUID->"e6632a39-e786-4b40-bd79-d5b5f0555c9f"],
+
+Cell["\<\
+prompts = LLMAtoZ`RL`toyPromptSet[bpe[\"MergeRules\"], tokId];
+hp = <|\"NRollouts\" -> 6, \"GenerationLen\" -> 20,
+       \"Temperature\" -> 1.2, \"LearningRate\" -> 0.001,
+       \"ContextLen\" -> 64, \"EotId\" -> tokId[\"<|eot|>\"]|>;
+res = LLMAtoZ`RL`runGrpoEpoch[net, prompts, hp];
+Length[res[\"History\"]]\
+\>", "Input",ExpressionUUID->"67cfb9c8-7a0b-45d8-ac55-69d93a84f2e0"],
+
+Cell["\<\
+ListLinePlot[
+  res[\"History\"][[All, \"meanReward\"]],
+  Frame -> True,
+  FrameLabel -> {\"step\", \"mean reward over the rollout group\"},
+  PlotLabel -> \"GRPO learning curve on the EOT-ending task\",
+  PlotStyle -> Directive[ColorData[97][1], Thick],
+  ImageSize -> 540, GridLines -> Automatic]\
+\>", "Input",ExpressionUUID->"6f6d7b08-8171-479b-be34-51cc976549dc"],
+
+Cell["6.  Summary", "Section",ExpressionUUID->"89973284-62f0-44dc-b5f1-221d6f3cd280"],
+
+Cell[TextData[{
+ "\[FilledSquare] ",
+ StyleBox["A full GRPO loop in less than 100 lines.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["rolloutBatch",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["centerAdvantages",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["policyGradientStep",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["runGrpoEpoch",
+  FontFamily->"Courier"],
+ " \[LongDash] no ",
+ "reference model, no KL term, no value head, no PPO clipping.\n",
+ "\[FilledSquare] ",
+ StyleBox["A trivial verifiable task",
+  FontWeight->Bold],
+ " (end-with-EOT) that exercises every step of the loop while ",
+ "finishing in minutes of CPU time. The same code with a different ",
+ StyleBox["rewardFn",
+  FontFamily->"Courier"],
+ " trains on GSM8K \[LongDash] swap one function."
+}], "Text",ExpressionUUID->"f3326079-21d8-479d-a9c6-c551ad091bd6"],
+
+Cell[TextData[{
+ "In ",
+ StyleBox["Part 8",
+  FontWeight->Bold],
+ " we put the post-trained model behind an interactive chat widget ",
+ "inside the notebook \[LongDash] the final artefact of the series."
+}], "Text",ExpressionUUID->"ba8fff4c-a1e0-4002-9a55-cb8b7d87ae71"],
+
+Cell["References", "Section",ExpressionUUID->"a2173b89-4a06-439a-9721-b3274fd33b17"],
+
+Cell["\<\
+Shao, Z. et al. (2024). DeepSeekMath: Pushing the Limits of Mathematical \
+Reasoning in Open Language Models. (GRPO.)
+Yu, F. et al. (2024). DAPO: An Open-Source LLM Reinforcement Learning System \
+at Scale.
+Karpathy, A. (2025). nanochat.\
+\>", "Text",ExpressionUUID->"189c6b51-1ea8-4b02-8754-d035d875b034"]
+},
+Saveable->True,
+WindowSize->{900, 750},
+FrontEndVersion->"14.3 for Mac OS X ARM (64-bit) (July 8, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"95e966e8-b712-4638-acd5-b8a6af3fba1a"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[554, 20, 153, 2, 70, "Title",ExpressionUUID->"c92a9806-1132-47e7-81c8-7394b43ce96a"],
+Cell[710, 24, 126, 0, 70, "Subtitle",ExpressionUUID->"8b7491fe-b421-4a9e-b977-ddda155b1ad4"],
+Cell[839, 26, 542, 10, 70, "Text",ExpressionUUID->"9e0fc5eb-1511-43a8-9926-0f2a790c071b"],
+Cell[1384, 38, 83, 0, 70, "Section",ExpressionUUID->"e5700cae-abd3-48c7-bedd-751c4213d78e"],
+Cell[1470, 40, 105, 0, 70, "Input",ExpressionUUID->"15aa198b-cdc8-45cc-bb78-d739b83d5068"],
+Cell[1578, 42, 377, 7, 70, "Input",ExpressionUUID->"a9d36d3f-6721-40c5-9d2e-de87f0648d07"],
+Cell[1958, 51, 107, 0, 70, "Section",ExpressionUUID->"14b74f2b-fbb8-4d11-8569-130849958b12"],
+Cell[2068, 53, 105, 0, 70, "Text",ExpressionUUID->"2632289c-1981-4657-a7f4-824a46b98637"],
+Cell[2176, 55, 1075, 34, 70, "Text",ExpressionUUID->"7ee447d0-f73b-4613-b09e-7c2b2065d5f3"],
+Cell[3254, 91, 409, 6, 70, "Text",ExpressionUUID->"c9b047dd-d620-45f4-9f7e-f2a3c876cbc4"],
+Cell[3666, 99, 117, 0, 70, "Section",ExpressionUUID->"429d5750-985e-4991-9a4f-6b029df9fbf5"],
+Cell[3786, 101, 520, 8, 70, "Text",ExpressionUUID->"49847268-ceca-4f81-abb3-1b4114e2e86b"],
+Cell[4309, 111, 112, 0, 70, "Section",ExpressionUUID->"10797c72-1ec5-4f3c-865f-ac745f22cbb8"],
+Cell[4424, 113, 577, 9, 70, "Input",ExpressionUUID->"8ccb77f5-2d27-417c-8495-44b73924c9da"],
+Cell[5004, 124, 338, 6, 70, "Input",ExpressionUUID->"d12bd5ff-f2e2-40bf-bf5c-b58d2f0e2d76"],
+Cell[5345, 132, 141, 3, 70, "Input",ExpressionUUID->"395a5cad-1383-4cf6-bad0-0216af918346"],
+Cell[5489, 137, 100, 0, 70, "Section",ExpressionUUID->"e6632a39-e786-4b40-bd79-d5b5f0555c9f"],
+Cell[5592, 139, 390, 7, 70, "Input",ExpressionUUID->"67cfb9c8-7a0b-45d8-ac55-69d93a84f2e0"],
+Cell[5985, 148, 379, 8, 70, "Input",ExpressionUUID->"6f6d7b08-8171-479b-be34-51cc976549dc"],
+Cell[6367, 158, 85, 0, 70, "Section",ExpressionUUID->"89973284-62f0-44dc-b5f1-221d6f3cd280"],
+Cell[6455, 160, 826, 26, 70, "Text",ExpressionUUID->"f3326079-21d8-479d-a9c6-c551ad091bd6"],
+Cell[7284, 188, 270, 6, 70, "Text",ExpressionUUID->"ba8fff4c-a1e0-4002-9a55-cb8b7d87ae71"],
+Cell[7557, 196, 84, 0, 70, "Section",ExpressionUUID->"a2173b89-4a06-439a-9721-b3274fd33b17"],
+Cell[7644, 198, 316, 6, 70, "Text",ExpressionUUID->"189c6b51-1ea8-4b02-8754-d035d875b034"]
+}
+]
+*)
+
+(* End of internal cache information *)

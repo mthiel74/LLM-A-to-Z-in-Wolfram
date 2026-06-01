@@ -1,0 +1,245 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[     10430,        236]
+NotebookOptionsPosition[      7884,        198]
+NotebookOutlinePosition[      8241,        214]
+CellTagsIndexPosition[      8198,        211]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell["\<\
+Build a Large Language Model from Scratch \[LongDash] in Wolfram Language\
+\>", "Title",ExpressionUUID->"2c5ba7fd-8080-4cf7-9aa9-c487e995fc9c"],
+
+Cell["\<\
+Part 5: Sampling \[LongDash] greedy, temperature, top-k, top-p, beam, \
+speculative\
+\>", "Subtitle",ExpressionUUID->"b2edaf89-f037-4499-9f73-612ffc520a92"],
+
+Cell[TextData[{
+ "The trained model in Part 4 is, at every step, a function from a ",
+ "context window to a length-",
+ Cell[BoxData[
+  RowBox[{"|", "V", "|"}]], "Text",
+  FontSize->14,ExpressionUUID->"bebf9c76-1dbe-49e1-a931-f9307d6919be"],
+ " logit vector. ",
+ StyleBox["Sampling",
+  FontSlant->Italic],
+ " is the policy that turns those logits into a chosen next token. ",
+ "Part 5 implements five strategies plus speculative decoding, all ",
+ "from scratch, and shows what each does to the output distribution."
+}], "Text",ExpressionUUID->"419bc36c-2524-45d7-bda9-6113baafce9a"],
+
+Cell["1.  Setup", "Section",ExpressionUUID->"818aa2e3-6d8e-4fb3-a108-1989ba30ee76"],
+
+Cell["SetDirectory[NotebookDirectory[]]", "Input",ExpressionUUID->"224ccb99-48b7-4462-a6ac-71e4b4aa6ac9"],
+
+Cell["Get[\"src/Sampling.wl\"]", "Input",ExpressionUUID->"04f9ae05-97fd-4178-840b-117a4d0f2f9c"],
+
+Cell["2.  Temperature: the easiest dial", "Section",ExpressionUUID->"e366a4b0-1e46-45b9-95e4-d727b81ec709"],
+
+Cell[TextData[{
+ "The temperature scaling ",
+ Cell[BoxData[
+  RowBox[{
+   RowBox[{"softmax", 
+    RowBox[{"(", "logits"}]}], "/", "T", ")"}]], "Text",
+  FontSize->14,ExpressionUUID->"af46262e-f13d-4ab6-811a-ccdebb35f12a"],
+ " is the simplest knob on the distribution. ",
+ Cell[BoxData[
+  RowBox[{"T", " ", "=", " ", "0"}]], "Text",
+  FontSize->14,ExpressionUUID->"89230c6a-9322-48ba-b659-320c3b0c1b36"],
+ " is pure argmax (greedy); ",
+ Cell[BoxData[
+  RowBox[{"T", " ", "=", " ", "1"}]], "Text",
+  FontSize->14,ExpressionUUID->"50d16155-875f-40bc-a0bf-530a4a634d0d"],
+ " is the model's calibrated distribution; ",
+ Cell[BoxData[
+  RowBox[{"T", " ", ">", " ", "1"}]], "Text",
+  FontSize->14,ExpressionUUID->"2d80c091-8594-4045-a66e-f651f33a9672"],
+ " softens toward uniform; ",
+ Cell[BoxData[
+  RowBox[{"T", 
+   RowBox[{" ", 
+    RowBox[{"\[Rule]", " "}]}], "\[Infinity]"}]], "Text",
+  FontSize->14,ExpressionUUID->"82648dc3-c87a-45e8-8d5f-c7b4240b0175"],
+ " is exactly uniform."
+}], "Text",ExpressionUUID->"d22f4bbe-03a8-48ee-b6bb-b6610901090e"],
+
+Cell["Import[\"figures/temperature_sweep.png\"]", "Input",ExpressionUUID->"b6b6ef4c-92e4-498c-983c-f0d38b4b4478"],
+
+Cell["2.1  Interactive: turn the temperature dial", "Subsection",ExpressionUUID->"c7e036a3-da44-40e8-8fad-e83455bb0a09"],
+
+Cell["\<\
+SeedRandom[3]; logits = Sort[RandomReal[NormalDistribution[0, 1.5], 20], \
+Greater];
+Manipulate[
+  BarChart[
+    LLMAtoZ`Sampling`softmaxTemperature[logits, T],
+    Frame -> True, FrameLabel -> {\"token id\", \"probability\"},
+    PlotLabel -> Row[{\"T = \", NumberForm[T, 3], \"  \[Bullet]  entropy = \
+\",
+      NumberForm[-Total[LLMAtoZ`Sampling`softmaxTemperature[logits, T] *
+        Log[LLMAtoZ`Sampling`softmaxTemperature[logits, T] + 1.*^-12]], 3]}],
+    PlotRange -> {Automatic, {0, 1}}, ChartStyle -> ColorData[97][1],
+    ImageSize -> 500],
+  {{T, 1.0, \"temperature\"}, 0.05, 3.0, 0.05, Appearance -> \"Labeled\"},
+  ControlPlacement -> Top]\
+\>", "Input",ExpressionUUID->"7da90c4a-2558-41f8-afd5-76002c6624fd"],
+
+Cell["3.  Top-k and top-p (nucleus)", "Section",ExpressionUUID->"7027edf9-1444-4d14-a08b-e87f30887092"],
+
+Cell[TextData[{
+ "Truncation strategies. ",
+ StyleBox["Top-k",
+  FontWeight->Bold],
+ " keeps the k highest-probability tokens and zeros the rest before ",
+ "re-normalising. ",
+ StyleBox["Top-p",
+  FontWeight->Bold],
+ " (nucleus sampling) instead keeps the smallest set of top tokens ",
+ "whose cumulative probability exceeds ",
+ Cell[BoxData["p"], "Text",
+  FontSize->14,ExpressionUUID->"35e0ed91-b07c-4ac3-b6ef-d7fecc457975"],
+ "; this adapts the cutoff to the local sharpness of the ",
+ "distribution."
+}], "Text",ExpressionUUID->"8269106f-5513-4f06-a22a-10f607be3a14"],
+
+Cell["Import[\"figures/topk_vs_topp.png\"]", "Input",ExpressionUUID->"c87ce398-c3c5-4045-b19c-80d0fd38f1fb"],
+
+Cell["4.  Beam search", "Section",ExpressionUUID->"531e9c22-2960-42ce-8aee-3b4b97131f0f"],
+
+Cell[TextData[{
+ "For translation-style tasks where one answer is correct, beam ",
+ "search is the deterministic alternative: track the ",
+ StyleBox["beamWidth",
+  FontFamily->"Courier"],
+ " most likely partial sequences at every step, and at the end ",
+ "return the highest-scoring complete one."
+}], "Text",ExpressionUUID->"8a034bf4-9cb9-47c7-abd7-e031dd3348e4"],
+
+Cell["\<\
+(* Demo: beam search on a tiny 4-token problem.
+   We define a fake stepFn that just returns scores based on the
+   sequence so far -- enough to see beam search pick the best path. *)
+fakeStep[ids_] := Module[{n = Length[ids]},
+  RandomReal[NormalDistribution[0, 1], 6] +
+    Table[If[i == Mod[n, 6] + 1, 2.0, 0.0], {i, 6}]];
+SeedRandom[1];
+LLMAtoZ`Sampling`beamSearch[fakeStep, {1}, 3, 8]\
+\>", "Input",ExpressionUUID->"cd17f386-b2c5-4850-8c96-2478feb65c88"],
+
+Cell["5.  Speculative decoding", "Section",ExpressionUUID->"4d732aed-f392-4db5-9a0d-d1da56528e78"],
+
+Cell[TextData[{
+ "A small draft model proposes ",
+ Cell[BoxData["k"], "Text",
+  FontSize->14,ExpressionUUID->"4250596f-3c71-4b8f-ab14-0ff9dd2a9686"],
+ " tokens autoregressively; the main model checks them in ",
+ "a single forward pass; accepted tokens commit, the first rejected ",
+ "token is resampled from the main. The throughput gain is roughly the ",
+ "expected accept-length divided by (1 + draft_cost_ratio * k).  Useful ",
+ "when the draft is much cheaper than the main."
+}], "Text",ExpressionUUID->"94583eed-dda8-47b7-8f56-6103f4995b08"],
+
+Cell["Import[\"figures/speculative_throughput.png\"]", "Input",ExpressionUUID->"d3fac019-b1f3-4d81-b60f-0acbe5f27060"],
+
+Cell["6.  Summary and what comes next", "Section",ExpressionUUID->"e640b792-8290-46e3-9995-220925e71c74"],
+
+Cell[TextData[{
+ "\[FilledSquare] ",
+ StyleBox["Five sampling strategies",
+  FontWeight->Bold],
+ " (greedy, temperature, top-k, top-p, beam) implemented from ",
+ "scratch as one-liners or short functions over a length-|V| logit ",
+ "vector.\n",
+ "\[FilledSquare] ",
+ StyleBox["Speculative decoding",
+  FontWeight->Bold],
+ " (Leviathan et al. 2023) for throughput speedup with a cheap ",
+ "draft model.\n",
+ "\[FilledSquare] ",
+ StyleBox["An interactive temperature dial",
+  FontWeight->Bold],
+ " showing the softmax distribution shape and entropy live."
+}], "Text",ExpressionUUID->"8bef6162-a10c-4a4b-83cd-a1be6b379465"],
+
+Cell[TextData[{
+ "In ",
+ StyleBox["Part 6",
+  FontWeight->Bold],
+ " we move from pre-training to ",
+ StyleBox["supervised fine-tuning",
+  FontSlant->Italic],
+ ": same next-token loss, but on instruction-following data ",
+ "formatted in the chat template <|user|>...<|assistant|>...<|eot|>."
+}], "Text",ExpressionUUID->"722bec22-41d3-43a4-b1ef-2e282af9b194"],
+
+Cell["References", "Section",ExpressionUUID->"5cf57442-4d89-4bd7-8058-64d879a4b56c"],
+
+Cell["\<\
+Holtzman, A. et al. (2020). The Curious Case of Neural Text Degeneration. \
+(Top-p / nucleus sampling.)
+Leviathan, Y., Kalman, M., Matias, Y. (2023). Fast Inference from \
+Transformers via Speculative Decoding.
+Karpathy, A. (2025). nanochat.\
+\>", "Text",ExpressionUUID->"1c16eb10-2647-4d28-837a-113a68121bd7"]
+},
+Saveable->True,
+WindowSize->{900, 750},
+FrontEndVersion->"14.3 for Mac OS X ARM (64-bit) (July 8, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"d40668d8-9d86-4bff-ad65-c5cbc74e3ca7"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[554, 20, 153, 2, 70, "Title",ExpressionUUID->"2c5ba7fd-8080-4cf7-9aa9-c487e995fc9c"],
+Cell[710, 24, 166, 3, 70, "Subtitle",ExpressionUUID->"b2edaf89-f037-4499-9f73-612ffc520a92"],
+Cell[879, 29, 581, 12, 70, "Text",ExpressionUUID->"419bc36c-2524-45d7-bda9-6113baafce9a"],
+Cell[1463, 43, 83, 0, 70, "Section",ExpressionUUID->"818aa2e3-6d8e-4fb3-a108-1989ba30ee76"],
+Cell[1549, 45, 105, 0, 70, "Input",ExpressionUUID->"224ccb99-48b7-4462-a6ac-71e4b4aa6ac9"],
+Cell[1657, 47, 96, 0, 70, "Input",ExpressionUUID->"04f9ae05-97fd-4178-840b-117a4d0f2f9c"],
+Cell[1756, 49, 107, 0, 70, "Section",ExpressionUUID->"e366a4b0-1e46-45b9-95e4-d727b81ec709"],
+Cell[1866, 51, 1045, 26, 70, "Text",ExpressionUUID->"d22f4bbe-03a8-48ee-b6bb-b6610901090e"],
+Cell[2914, 79, 113, 0, 70, "Input",ExpressionUUID->"b6b6ef4c-92e4-498c-983c-f0d38b4b4478"],
+Cell[3030, 81, 120, 0, 70, "Subsection",ExpressionUUID->"c7e036a3-da44-40e8-8fad-e83455bb0a09"],
+Cell[3153, 83, 733, 15, 70, "Input",ExpressionUUID->"7da90c4a-2558-41f8-afd5-76002c6624fd"],
+Cell[3889, 100, 103, 0, 70, "Section",ExpressionUUID->"7027edf9-1444-4d14-a08b-e87f30887092"],
+Cell[3995, 102, 571, 14, 70, "Text",ExpressionUUID->"8269106f-5513-4f06-a22a-10f607be3a14"],
+Cell[4569, 118, 108, 0, 70, "Input",ExpressionUUID->"c87ce398-c3c5-4045-b19c-80d0fd38f1fb"],
+Cell[4680, 120, 89, 0, 70, "Section",ExpressionUUID->"531e9c22-2960-42ce-8aee-3b4b97131f0f"],
+Cell[4772, 122, 364, 7, 70, "Text",ExpressionUUID->"8a034bf4-9cb9-47c7-abd7-e031dd3348e4"],
+Cell[5139, 131, 469, 9, 70, "Input",ExpressionUUID->"cd17f386-b2c5-4850-8c96-2478feb65c88"],
+Cell[5611, 142, 98, 0, 70, "Section",ExpressionUUID->"4d732aed-f392-4db5-9a0d-d1da56528e78"],
+Cell[5712, 144, 546, 9, 70, "Text",ExpressionUUID->"94583eed-dda8-47b7-8f56-6103f4995b08"],
+Cell[6261, 155, 118, 0, 70, "Input",ExpressionUUID->"d3fac019-b1f3-4d81-b60f-0acbe5f27060"],
+Cell[6382, 157, 105, 0, 70, "Section",ExpressionUUID->"e640b792-8290-46e3-9995-220925e71c74"],
+Cell[6490, 159, 620, 16, 70, "Text",ExpressionUUID->"8bef6162-a10c-4a4b-83cd-a1be6b379465"],
+Cell[7113, 177, 357, 9, 70, "Text",ExpressionUUID->"722bec22-41d3-43a4-b1ef-2e282af9b194"],
+Cell[7473, 188, 84, 0, 70, "Section",ExpressionUUID->"5cf57442-4d89-4bd7-8058-64d879a4b56c"],
+Cell[7560, 190, 320, 6, 70, "Text",ExpressionUUID->"1c16eb10-2647-4d28-837a-113a68121bd7"]
+}
+]
+*)
+
+(* End of internal cache information *)

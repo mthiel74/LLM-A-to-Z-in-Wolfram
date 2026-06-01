@@ -1,0 +1,27 @@
+{
+	"trainLoss":0.7421149259383856,
+	"evalLoss":2.592107352310227,
+	"evalPerplexity":1.3357891747297247e1,
+	"trainPerplexity":2.1003729536527174,
+	"generalisationGap":3.493,
+	"verdict":"overfitting clearly â stop and use the current checkpoint",
+	"round":24,
+	"wallMinutes":3.305e2,
+	"generations":{
+		"ROMEO:":{
+			"T=0.5":"ROMEO:\nI do believe twelve me some.\n\nBENVOLIO:\nThen we note where;\nYet I pray you, sir? I have do not stain'd\nIn all the leading-glantle, and he shall not?\n\nPETRUCHIO:\nWhy, there is yours?\n\nHORTENSIO:\nA Richard: then? to the poor: the gods shall pale\nin him that shall shape to him a great king.\n\nPETRUCHIO:\nGod-faith, I said myself and between born.\n\nGREMIO:\nGood boy, good cites! and all my former heart,",
+			"T=0.8":"ROMEO:\n'Twas swell fought a proverb or toward,\nA heaven bawd, a partasted head,\nThe day's is absence; so it awake\nThe heir inconstant her wedder like an admsper.\n\nKING RICHARD II:\nWhat, resolumost as you, father, and yours, harge;\nEre you shall see, how I take my land.\n\nQUEEN MARGARET:\nGod green Lord Barnanch:\nTo play the man makes KING EDWARD IV:\nYea, prithee, Lord Albanes, and Declerish.\n\nYORK:\nWell, ",
+			"T=1.":"ROMEO:\nI thought it well, that he royal kings?\n\nCATESBY:\nWhat house?\n\nCARINA:\nWhy answer were I am wert discoved?\n\nPARIS:\nAgreed it begion, sir, I say!\n\nISABELLA:\nAt all movearse thee that, I pray a man.\n\nANGELO:\nGo stantly know you, provost: prize you, Mistress,\nYour welcomes and heir will have senated man.\n\nLADY ANNE:\nWhy should you shall promise this heart so vile\nOven your lasting your edges.\n\nCOMIN"
+		},
+		"HAMLET:\n":{
+			"T=0.5":"HAMLET:\nI know not, Juliet, 'tis my sovereign,\nThe greater swain speaks, not of death,\nBut that thou talk'st of my death?\n\nTRANIO:\nNo, sir, I am a gentleman, I beseech you,\nAnd not often cure of our title death or fait,\nShe straight and clear no matter,\nThat I may say, I advour'd like a creeping strain.\n\nPETER:\nAnd I am sorrow'd be, I say, some light.\n\nGREY:\nMy good lord, with my life, I do protest,\nAnd n",
+			"T=0.8":"HAMLET:\nI loin, the being cond cheque told us,\nShe give signal a reason break out, or else the\nso deep is company.\n\nMARCIUS:\nDo you came on, and so still\nGo save yourselves.\n\nAUTOLYCUS:\nI prative to be you. What gone do you that?\n\nISABELLA:\nLove me as you do that seen so distrange\nTitude, I advise your enterious lord:\nWhat, I say, I would not---when thou hast sentenced\nWith a brack's well-diversments, and",
+			"T=1.":"HAMLET:\nHe neither gods, and your honour brother Montague,\nWhose strifes--of an hour spleful feet,--\nIs better than a fearthen too good, why he drinkades\nMust grains the air of bishes thee.\n\nPETRUCHIO:\nO protectise! O simple! what!\n\nHORTENSIO:\nWhy is Gentleman:\nWhat wilt thou, till I know myself to\nstood from the weakest of the world?\n\nNORTHUMBERLAND:\nBut thou grows by thy shame of Gloucester?\n\nLORD ROSS:"
+		},
+		"First Citizen:\n":{
+			"T=0.5":"First Citizen:\nThe iminield hour of all these bloody were alike.\n\nMENENIUS:\nI may not.\n\nCORIOLANUS:\nHail, he hath done! he thinks not the sing of his\nsubstitute, as I do in a good day of a most\nfal dited skilf-conclack, the humour of the house\nof the reasons to make mine honour, and ere he sight\nThe deeper o' the people. O two offer'd!\nYour soul uneven comes now, good comfort!\n\nSecond Murderer:\nWhat will have I ",
+			"T=0.8":"First Citizen:\nI am undone, his neighbours; call up.\nGive me thus; with if you manly patess and natural.\n\nAUTOLYCUS:\nYou have, madam: I take the marge, let's away.\n\nShepherd:\nI have deserved out of celtself\n\nAUTOLYCUS:\nO, sir, good chide, and have his death maids\napproach'd, and in the shreedom o' the stabbed,\nThe pest daggerous harms out of open foe,\nThe soevera stands of cur her blood be troth:\nAnd then I'll n",
+			"T=1.":"First Citizen:\nOur penitence cross makes Mercutio, you must lecture\nOur are horses! no man secure, he is not so.\n\nTRANIO:\n'Tis not do your poor sont.\n\nMERCUTIO:\nThe court of Business, give wid, and desperate,\nI think me, and respectume sorrow fear\nAs I are, were with all grave of honest?\n\nHORTENSIO:\nWell, though mistress i' the between.\n\nQUEEN MARGARET:\nWhen guilty as me to jocund time to take\nA dudgencent gentl"
+		}
+	}
+}

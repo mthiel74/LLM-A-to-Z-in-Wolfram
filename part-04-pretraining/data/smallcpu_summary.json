@@ -1,0 +1,14 @@
+{
+	"tier":"smallCPU",
+	"trainableParams":6883296,
+	"elapsedSeconds":1461.103556,
+	"elapsedMinutes":2.4351725933333334e1,
+	"rounds":10,
+	"finalRoundLoss":1.0866219128556882,
+	"samples":{
+		"ROMEO:":"ROMEO : ? ; I rohave : : : l Fa: have out like ding whilst out , I : have shall Warwick So gone have have n'd dWarwick I : seem sing tiabI stiI -- how Why have , I ? I these have honour almight , we like I'll your Warwick hear , : supper was : en: ; like one was flight we , LADY , we Why these ; se ",
+		"HAMLET:":"HAMLET : like live I dSo given t down ryour bathy shall , like ? TRANIO hours I , like : we these shall stay ; ? have stithese : ious see these have was Ethis rich : : for ; ? before meI'll another friend out , , we We'll we we against , we , we Warwick your : ? , , : , have we , Now , ? whence ding ? one ",
+		"First Citizen:":"First Citizen : ; , these ? ark , : thy rough like ? I like did , VINCENTIO ri, sptime these have , , , matter have l , ? , ious VINCENTIO , : , out dowfa, , , , fair like shall LADY shall -- have ; spirit ty fe: we see we , have shall , buhave irn'd , have , : for have , , The con, was we your ",
+		"To be or not":"To be or not have we , Warwick have ? we I , , , still was ll; ? live n'd have For these , is live , : , : have daughter For was ; : have Why , : we was I n'd baout , iryour little Swe , time powe see ; , reWarwick like n'd like S: like , : : : shall , : : So tra: shall ; , ; "
+	}
+}

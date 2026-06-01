@@ -1,0 +1,1041 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[     43198,       1033]
+NotebookOptionsPosition[     35862,        901]
+NotebookOutlinePosition[     36273,        918]
+CellTagsIndexPosition[     36230,        915]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+
+Cell[CellGroupData[{
+Cell["Scaling Up: A GPT-2 Discussion Model", "Title",ExpressionUUID->"dfeb9171-a06d-4050-a294-0027267bc8c2"],
+
+Cell["From the 20-pair toy SFT to a model that actually chats", "Subtitle",ExpressionUUID->"7df988a9-873e-461e-86a3-67736e03b8db"],
+
+Cell[TextData[{
+ "The master notebook ended with a 124M-parameter GPT-2 model SFT'd on ",
+ "20 hand-written Q&A pairs.  It learned the chat ",
+ StyleBox["template",
+  FontSlant->Italic],
+ " but its factual answers were obviously wrong (\"Hamlet is a ",
+ "playwright who wrote the play in 1763\").  In this notebook we keep ",
+ "the same architecture and the same training loop -- and just give ",
+ "the model real data: 10,000 instruction\[Dash]response pairs from the ",
+ "Apache-2.0 Alpaca-cleaned corpus (Stanford 2023).  Three SFT epochs ",
+ "take 3-4 hours on a Mac mini CPU.  The result is a small but ",
+ "genuinely conversational model."
+}], "Text",ExpressionUUID->"7cf2b1bd-1b09-419e-8e4c-5cdcd7b8bdb4"],
+
+Cell["Two design choices worth flagging:", "Text",ExpressionUUID->"bc8fb34e-3684-47f3-9fae-fc38cde961b2"],
+
+Cell[TextData[{
+ "1. ",
+ StyleBox["GPT-2 small (124M), not medium (345M)",
+  FontWeight->Bold],
+ ".  Medium gives a more capable base, but in our Mac-mini setup it ",
+ "hits an MXNet operator-shape bug when we strip the inference tail ",
+ "and re-chain for training, and per-example wall time would put any ",
+ "meaningful training run beyond 8 days.  Cloud compute fixes both ",
+ "issues; for the educational story we keep small and treat ",
+ "RemoteBatchSubmit as the scaling switch.\n",
+ "2. ",
+ StyleBox["Plain-text chat template, no new vocabulary tokens",
+  FontWeight->Bold],
+ ".  The master notebook taught the canonical ",
+ StyleBox["<|user|>...<|assistant|>...<|eot|>",
+  FontFamily->"Courier"],
+ " trick.  Here we use plain ",
+ StyleBox["\"User: ...\\nAssistant: ...\\n\"",
+  FontFamily->"Courier"],
+ ".  GPT-2's BPE tokeniser already represents \"User\", \"Assistant\", ",
+ "the colon, the newline; we keep the 50,257-entry vocabulary and ",
+ "the weight tying intact.  Less elegant theoretically; more robust ",
+ "practically."
+}], "Text",ExpressionUUID->"b5bc1457-4923-4d9c-8da5-ca0bdd008553"],
+
+Cell[CellGroupData[{
+
+Cell["1.  Setup", "Chapter",ExpressionUUID->"1b675355-7a44-4889-bc77-dc123ca4d63f"],
+
+Cell[CellGroupData[{
+
+Cell["SetDirectory[NotebookDirectory[]]", "Input",
+ CellLabel->"In[83]:=",ExpressionUUID->"ff311b9e-31de-42d4-b3d1-e047ca12a903"],
+
+Cell[BoxData["\<\"/Users/thiel/GitHub/LLM-A-to-Z-in-WL/discussion-model\"\>"],\
+ "Output",
+ CellChangeTimes->{3.988366851501524*^9},
+ CellLabel->"Out[83]=",ExpressionUUID->"9d0037a3-6dd0-4778-ab81-8d3ab54ab5ef"]
+}, Open  ]],
+
+Cell["Get[\"src/Discussion.wl\"]", "Input",
+ CellLabel->"In[84]:=",ExpressionUUID->"300ab9ff-b14f-41db-a004-112f6195f476"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["2.  Load GPT-2 small and inspect", "Chapter",ExpressionUUID->"5767c193-6d02-43f8-b642-3a64558f80f3"],
+
+Cell["\<\
+WL ships GPT-2 in three sizes (117M, 345M, 774M) via the Neural Net \
+Repository.  Loading downloads ~498 MB on first call and caches the weights \
+on disk.\
+\>", "Text",ExpressionUUID->"a983779c-5610-42d4-9b3d-fd6f67ac8800"],
+
+Cell[CellGroupData[{
+
+Cell["\<\
+gpt = LLMAtoZ`Discussion`loadGpt2Small[];
+Information[gpt, \"ArraysTotalElementCount\"]\
+\>", "Input",
+ CellLabel->"In[85]:=",ExpressionUUID->"45488597-c03f-49ad-9a9e-38ebf1196cc4"],
+
+Cell[BoxData["124439808"], "Output",
+ CellChangeTimes->{3.9883668515775337`*^9},
+ CellLabel->"Out[86]=",ExpressionUUID->"eb2d39e7-4870-49b4-b9dc-577030fc777d"]
+}, Open  ]],
+
+Cell["The pretrained net has five top-level layers:", "Text",ExpressionUUID->"22ad1d51-b52f-4d63-89a6-c39204506491"],
+
+Cell[CellGroupData[{
+
+Cell["Keys @ NetExtract[gpt, All]", "Input",
+ CellLabel->"In[87]:=",ExpressionUUID->"3db38c8e-29e1-4f78-b320-f39d497d909d"],
+
+Cell[BoxData[
+ RowBox[{"{", 
+  RowBox[{"\<\"embedding\"\>", ",", "\<\"decoder\"\>", ",", "\<\"last\"\>", 
+   ",", "\<\"classifier\"\>", ",", "\<\"probabilities\"\>"}], "}"}]], "Output",\
+
+ CellChangeTimes->{3.9883668515807123`*^9},
+ CellLabel->"Out[87]=",ExpressionUUID->"03cf69dc-26d3-4b98-9a78-21f2bbe7bc17"]
+}, Open  ]],
+
+Cell["The structure is:", "Text",ExpressionUUID->"090c7d36-c8c4-4350-9121-7f80d091e9d6"],
+
+Cell[TextData[{
+ StyleBox["embedding",
+  FontFamily->"Courier"],
+ " (token + positional) \[RightArrow] ",
+ StyleBox["decoder",
+  FontFamily->"Courier"],
+ " (12 transformer blocks for small) \[RightArrow] ",
+ StyleBox["last",
+  FontFamily->"Courier"],
+ " (SequenceLastLayer: takes only the last position) \[RightArrow] ",
+ StyleBox["classifier",
+  FontFamily->"Courier"],
+ " (LinearLayer: 768 \[Rule] 50,257) \[RightArrow] ",
+ StyleBox["probabilities",
+  FontFamily->"Courier"],
+ " (SoftmaxLayer).  This wiring is for ",
+ StyleBox["inference",
+  FontSlant->Italic],
+ ": one prompt in, one next-token distribution out."
+}], "Text",ExpressionUUID->"46a57518-f161-4176-bbb3-6a87b488e2db"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["3.  Surgery: from inference net to training trunk", "Chapter",ExpressionUUID->"295a91ca-9b90-4391-bc64-d0bfe246f2d0"],
+
+Cell["\<\
+For SFT we need per-position logits at every step.  Three changes:\
+\>", "Text",ExpressionUUID->"ae4c75db-a411-4638-b784-801060510b96"],
+
+Cell[TextData[{
+ "1. Drop ",
+ StyleBox["SequenceLastLayer",
+  FontFamily->"Courier"],
+ " so we keep all positions of the (seqLen, dModel) decoder output.\n",
+ "2. Wrap the ",
+ StyleBox["classifier",
+  FontFamily->"Courier"],
+ " in ",
+ StyleBox["NetMapOperator",
+  FontFamily->"Courier"],
+ " so it applies row-wise rather than once.\n",
+ "3. Drop the final ",
+ StyleBox["SoftmaxLayer",
+  FontFamily->"Courier"],
+ " -- the training loop adds its own softmax via ",
+ StyleBox["NetMapOperator[SoftmaxLayer[]]",
+  FontFamily->"Courier"],
+ " so that ",
+ StyleBox["CrossEntropyLossLayer[\"Index\"]",
+  FontFamily->"Courier"],
+ " sees probabilities (the bug from Section 5.3 of the master)."
+}], "Text",ExpressionUUID->"57a31bd7-37a3-4ce3-b2c9-ad56246ab0f1"],
+
+Cell[CellGroupData[{
+
+Cell["\<\
+trunk = LLMAtoZ`Discussion`buildTrainableTrunk[gpt];
+Information[trunk, \"ArraysTotalElementCount\"]\
+\>", "Input",
+ CellLabel->"In[88]:=",ExpressionUUID->"d2df4391-2825-4c2e-96db-de5cd233af5a"],
+
+Cell[BoxData["124439808"], "Output",
+ CellChangeTimes->{3.988366851883337*^9},
+ CellLabel->"Out[89]=",ExpressionUUID->"f3e24c8a-636f-43d5-90f4-b1364037b8fd"]
+}, Open  ]],
+
+Cell["\<\
+Same parameter count as the original (we just rearranged), and the \
+embedding-classifier weight tying is preserved through the bundled \
+SharedArrays.\
+\>", "Text",ExpressionUUID->"3f450775-e6e1-4029-8374-332e7c18da08"],
+
+Cell[CellGroupData[{
+
+Cell["\<\
+(* Sanity: feed a 4-token sequence and verify shape *)
+encoder = NetExtract[gpt, \"Input\"];
+ids = encoder[\"Hello world. How are you today?\"];
+Print[\"ids: \", ids];
+out = trunk[ids];
+Print[\"output dims: \", Dimensions[out]]\
+\>", "Input",
+ CellLabel->"In[90]:=",ExpressionUUID->"17be58c4-6c80-4634-b7ae-0012f9b868f0"],
+
+Cell[CellGroupData[{
+
+Cell[BoxData[
+ InterpretationBox[
+  RowBox[{"\<\"ids: \"\>", "\[InvisibleSpace]", 
+   RowBox[{"{", 
+    RowBox[{
+    "15241", ",", "740", ",", "50244", ",", "1119", ",", "134", ",", "90", ",",
+      "1654", ",", "50227"}], "}"}]}],
+  SequenceForm["ids: ", {15241, 740, 50244, 1119, 134, 90, 1654, 50227}],
+  Editable->False]], "Print",
+ CellChangeTimes->{3.988366851894503*^9},
+ CellLabel->
+  "During evaluation of \
+In[90]:=",ExpressionUUID->"69d96a79-f15e-470d-b322-c12e6f2fcf7d"],
+
+Cell[BoxData[
+ InterpretationBox[
+  RowBox[{"\<\"output dims: \"\>", "\[InvisibleSpace]", 
+   RowBox[{"{", 
+    RowBox[{"8", ",", "50257"}], "}"}]}],
+  SequenceForm["output dims: ", {8, 50257}],
+  Editable->False]], "Print",
+ CellChangeTimes->{3.988366852425885*^9},
+ CellLabel->
+  "During evaluation of \
+In[90]:=",ExpressionUUID->"d6035edb-b6bf-42de-9514-11a5a42dd3ba"]
+}, Open  ]]
+}, Open  ]],
+
+Cell["\<\
+(seqLen, 50257) -- per-position logits over the full vocabulary.  That is the \
+shape NetTrain needs.\
+\>", "Text",ExpressionUUID->"49237287-9adb-45e0-95d8-ba1cc08ae858"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["4.  The dataset: Alpaca-cleaned", "Chapter",ExpressionUUID->"7d3a0225-a24f-4c38-8663-aa6f68bcfc81"],
+
+Cell[TextData[{
+ "Alpaca-cleaned (Yahma 2023, Apache 2.0) is 51,760 instruction-",
+ "response pairs in three fields: ",
+ StyleBox["instruction",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["input",
+  FontFamily->"Courier"],
+ " (optional context), ",
+ StyleBox["output",
+  FontFamily->"Courier"],
+ ".  Format each as plain ",
+ "text with markers that GPT-2's BPE already tokenises naturally."
+}], "Text",ExpressionUUID->"b33f1d5d-e8a0-45a5-ae23-826b33ee5487"],
+
+Cell[CellGroupData[{
+
+Cell["\<\
+examples = LLMAtoZ`Discussion`loadAlpacaExamples[5];
+TableForm[
+  Map[KeyTake[#, {\"instruction\", \"output\"}] &, examples],
+  TableHeadings -> {None, {\"instruction\", \"output\"}}]\
+\>", "Input",
+ CellLabel->"In[96]:=",ExpressionUUID->"b53626e2-01c2-4468-8f55-e69e3e11330a"],
+
+Cell[BoxData[
+ TagBox[
+  TagBox[GridBox[{
+     {
+      RowBox[{"\[LeftAssociation]", 
+       RowBox[{
+        RowBox[{"\<\"instruction\"\>", 
+         "\[Rule]", "\<\"Give three tips for staying healthy.\"\>"}], ",", 
+        RowBox[{"\<\"output\"\>", 
+         "\[Rule]", "\<\"1. Eat a balanced and nutritious diet: Make sure \
+your meals are inclusive of a variety of fruits and vegetables, lean protein, \
+whole grains, and healthy fats. This helps to provide your body with the \
+essential nutrients to function at its best and can help prevent chronic \
+diseases.\\n\\n2. Engage in regular physical activity: Exercise is crucial \
+for maintaining strong bones, muscles, and cardiovascular health. Aim for at \
+least 150 minutes of moderate aerobic exercise or 75 minutes of vigorous \
+exercise each week.\\n\\n3. Get enough sleep: Getting enough quality sleep is \
+crucial for physical and mental well-being. It helps to regulate mood, \
+improve cognitive function, and supports healthy growth and immune function. \
+Aim for 7-9 hours of sleep each night.\"\>"}]}], "\[RightAssociation]"}]},
+     {
+      RowBox[{"\[LeftAssociation]", 
+       RowBox[{
+        RowBox[{"\<\"instruction\"\>", 
+         "\[Rule]", "\<\"What are the three primary colors?\"\>"}], ",", 
+        RowBox[{"\<\"output\"\>", 
+         "\[Rule]", "\<\"The three primary colors are red, blue, and yellow. \
+These colors are called primary because they cannot be created by mixing \
+other colors and all other colors can be made by combining them in various \
+proportions. In the additive color system, used for light, the primary colors \
+are red, green, and blue (RGB).\"\>"}]}], "\[RightAssociation]"}]},
+     {
+      RowBox[{"\[LeftAssociation]", 
+       RowBox[{
+        RowBox[{"\<\"instruction\"\>", 
+         "\[Rule]", "\<\"Describe the structure of an atom.\"\>"}], ",", 
+        RowBox[{"\<\"output\"\>", 
+         "\[Rule]", "\<\"An atom is the basic building block of all matter \
+and is made up of three types of particles: protons, neutrons, and electrons. \
+The structure of an atom can be described as a nucleus at the center \
+surrounded by a cloud of electrons.\\n\\nThe nucleus of an atom is made up of \
+protons and neutrons. Protons are positively charged particles and neutrons \
+are neutral particles with no charge. Both of these particles are located in \
+the nucleus of the atom, which is at the center of the atom and contains most \
+of the atom's mass.\\n\\nSurrounding the nucleus of the atom is a cloud of \
+electrons. Electrons are negatively charged particles that are in constant \
+motion around the nucleus. The electron cloud is divided into shells or \
+orbitals, and each shell can hold a certain number of electrons. The number \
+of electrons in the outermost shell, called the valence shell, determines the \
+chemical properties of the atom. \\n\\nIn a neutral atom, the number of \
+protons in the nucleus is equal to the number of electrons in the electron \
+cloud, so the positive and negative charges balance out and the atom has no \
+overall charge. The number of protons, also called the atomic number, \
+determines what element the atom is.\"\>"}]}], "\[RightAssociation]"}]},
+     {
+      RowBox[{"\[LeftAssociation]", 
+       RowBox[{
+        RowBox[{"\<\"instruction\"\>", 
+         "\[Rule]", "\<\"How can we reduce air pollution?\"\>"}], ",", 
+        RowBox[{"\<\"output\"\>", 
+         "\[Rule]", "\<\"There are several ways to reduce air pollution, \
+including:\\n\\n1. Reduce energy consumption: By conserving energy, we reduce \
+the amount of pollution emitted from power plants. Some ways to achieve this \
+include: using energy-efficient appliances and lighting, insulating homes, \
+and shutting off lights and electronics when not in use.\\n\\n2. Use public \
+transportation or carpool: Cars and trucks are major sources of pollution. By \
+using public transportation, carpooling or biking, you can reduce the number \
+of cars on the road, which in turn reduces emissions.\\n\\n3. Be responsible \
+with waste: When waste is burned or decomposed, they can release harmful \
+gases into the air. Dispose of hazardous waste correctly and recycle \
+materials like plastics, paper, and glass when possible.\\n\\n4. Support \
+clean energy sources: Renewable energy sources like solar and wind power \
+generate little or no pollution. Support clean energy companies and projects, \
+and consider installing renewable energy systems in your home.\\n\\n5. Drive \
+efficiently: If you need to drive, make sure your vehicle is well maintained \
+and drive efficiently by avoiding rapid acceleration and braking, and \
+reducing idling.\\n\\n6. Be mindful of product choices: Some products and \
+practices release more pollution than others. Choose products with \
+eco-friendly packaging and try to minimize your use of aerosol sprays, which \
+can release harmful chemicals into the air.\"\>"}]}], "\[RightAssociation]"}]},
+     {
+      RowBox[{"\[LeftAssociation]", 
+       RowBox[{
+        RowBox[{"\<\"instruction\"\>", 
+         "\[Rule]", "\<\"Pretend you are a project manager of a construction \
+company. Describe a time when you had to make a difficult decision.\"\>"}], ",", 
+        RowBox[{"\<\"output\"\>", 
+         "\[Rule]", "\<\"I had to make a difficult decision when I was \
+working as a project manager at a construction company. I was in charge of a \
+project that needed to be completed by a certain date in order to meet the \
+client\[CloseCurlyQuote]s expectations. However, due to unexpected delays, we \
+were not able to meet the deadline and so I had to make a difficult decision. \
+I decided to extend the deadline, but I had to stretch the team\
+\[CloseCurlyQuote]s resources even further and increase the budget. Although \
+it was a risky decision, I ultimately decided to go ahead with it to ensure \
+that the project was completed on time and that the client\[CloseCurlyQuote]s \
+expectations were met. The project was eventually successfully completed and \
+this was seen as a testament to my leadership and decision-making \
+abilities.\"\>"}]}], "\[RightAssociation]"}]}
+    },
+    GridBoxAlignment->{"Columns" -> {{Left}}, "Rows" -> {{Baseline}}},
+    GridBoxSpacings->{"Columns" -> {
+        Offset[0.27999999999999997`], {
+         Offset[0.5599999999999999]}, 
+        Offset[0.27999999999999997`]}, "Rows" -> {
+        Offset[0.2], {
+         Offset[0.4]}, 
+        Offset[0.2]}}],
+   Column],
+  Function[BoxForm`e$, 
+   TableForm[
+   BoxForm`e$, 
+    TableHeadings -> {None, {"instruction", "output"}}]]]], "Output",
+ CellChangeTimes->{3.9883668527800198`*^9},
+ CellLabel->
+  "Out[97]//TableForm=",ExpressionUUID->"f1a94957-3732-4f6c-bbe3-\
+d9b04b274858"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["LLMAtoZ`Discussion`formatPair[examples[[1]]]", "Input",
+ CellLabel->"In[98]:=",ExpressionUUID->"b613f374-de53-4b7b-bda0-6152586732a4"],
+
+Cell[BoxData["\<\"User: Give three tips for staying healthy.\\nAssistant: 1. \
+Eat a balanced and nutritious diet: Make sure your meals are inclusive of a \
+variety of fruits and vegetables, lean protein, whole grains, and healthy \
+fats. This helps to provide your body with the essential nutrients to \
+function at its best and can help prevent chronic diseases.\\n\\n2. Engage in \
+regular physical activity: Exercise is crucial for maintaining strong bones, \
+muscles, and cardiovascular health. Aim for at least 150 minutes of moderate \
+aerobic exercise or 75 minutes of vigorous exercise each week.\\n\\n3. Get \
+enough sleep: Getting enough quality sleep is crucial for physical and mental \
+well-being. It helps to regulate mood, improve cognitive function, and \
+supports healthy growth and immune function. Aim for 7-9 hours of sleep each \
+night.\\n\"\>"], "Output",
+ CellChangeTimes->{3.988366852813038*^9},
+ CellLabel->"Out[98]=",ExpressionUUID->"98ec5dec-1a74-42c7-8719-bc16e3022130"]
+}, Open  ]],
+
+Cell["\<\
+Encode + truncate / pad to a fixed context length of 128 tokens, then split \
+each sequence into shifted input / target pairs.\
+\>", "Text",ExpressionUUID->"c518810f-6e20-4d7b-af01-63ae249f2487"],
+
+Cell[CellGroupData[{
+
+Cell["\<\
+dataset = LLMAtoZ`Discussion`buildSftDataset[
+  LLMAtoZ`Discussion`formatPair /@ examples,
+  encoder, 128];
+Print[\"examples: \", Length[dataset]];
+Print[\"first example shape: input=\", Length[dataset[[1]][\"Input\"]],
+      \"  output=\", Length[dataset[[1]][\"Output\"]]]\
+\>", "Input",
+ CellLabel->"In[99]:=",ExpressionUUID->"677f0746-2f03-40ae-9107-a33a8caeead6"],
+
+Cell[CellGroupData[{
+
+Cell[BoxData[
+ InterpretationBox[
+  RowBox[{"\<\"examples: \"\>", "\[InvisibleSpace]", "5"}],
+  SequenceForm["examples: ", 5],
+  Editable->False]], "Print",
+ CellChangeTimes->{3.988366852820827*^9},
+ CellLabel->
+  "During evaluation of \
+In[99]:=",ExpressionUUID->"2a0ed1f0-712f-4ddf-914f-dd7d7be0d01d"],
+
+Cell[BoxData[
+ InterpretationBox[
+  RowBox[{"\<\"first example shape: input=\"\>", "\[InvisibleSpace]", "128", 
+   "\[InvisibleSpace]", "\<\"  output=\"\>", "\[InvisibleSpace]", "128"}],
+  SequenceForm["first example shape: input=", 128, "  output=", 128],
+  Editable->False]], "Print",
+ CellChangeTimes->{3.988366852821361*^9},
+ CellLabel->
+  "During evaluation of \
+In[99]:=",ExpressionUUID->"e14ca26d-5cce-4c92-90f4-dfcfd5d50a0b"]
+}, Open  ]]
+}, Open  ]]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["5.  Training (the actual SFT)", "Chapter",ExpressionUUID->"e91f2191-0805-4581-9000-9a1cd69fde6a"],
+
+Cell[TextData[{
+ "On a Mac mini CPU at batch_size 4, GPT-2 small SFT runs at about ",
+ StyleBox["0.42 s/example",
+  FontWeight->Bold],
+ " in steady state.  10,000 examples \[Times] 3 epochs = 30,000 forward+",
+ "backward passes; about 3.5 hours wall.  ",
+ StyleBox["trainOvernight",
+  FontFamily->"Courier"],
+ " checkpoints to disk every 30 minutes so an early ",
+ StyleBox["Ctrl-C",
+  FontFamily->"Courier"],
+ " still leaves you with a ",
+ "usable model."
+}], "Text",ExpressionUUID->"9bfc1b19-b967-40f2-bd5d-0d49b29cccdd"],
+
+Cell["\<\
+Heavy run -- skip in interactive notebook use.  Kick it off from a shell \
+instead and read the progress log:\
+\>", "Text",ExpressionUUID->"233018a3-01a7-43e7-ab08-34048fdfe9f6"],
+
+Cell["\<\
+wolframscript -file discussion-model/src/run_discussion_sft.wls 10000 3
+tail -f discussion-model/data/discussion_progress.txt\
+\>", "Program",ExpressionUUID->"44e166ef-6222-40a3-8516-f07e5600a323"],
+
+Cell["\<\
+The cells below load a previously-trained checkpoint and exercise it.  Until \
+that file exists, the chat widget at the end will show a warning placeholder.\
+\
+\>", "Text",ExpressionUUID->"18dc4aa0-2c38-4a9c-bd3b-ac659093fccf"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["6.  Load the trained model", "Chapter",ExpressionUUID->"9dcf73a3-6641-44fd-986c-482fb9fe7f68"],
+
+Cell[TextData[{
+ "The notebook expects to be opened from ",
+ StyleBox["discussion-model/",
+  FontFamily->"Courier"],
+ ", so paths below are anchored at ",
+ StyleBox["NotebookDirectory[]",
+  FontFamily->"Courier"],
+ ".  Pick the best available trained checkpoint: the cloud-trained ",
+ "GPT-2 medium (1.35 GB) if you have it, else the local GPT-2 small ",
+ "SFT (498 MB), else fall back to the untrained trunk so the rest ",
+ "of the chapter still runs."
+}], "Text",ExpressionUUID->"e97f22f6-f324-4345-863d-807c00e0ac33"],
+
+Cell[CellGroupData[{
+
+Cell["\<\
+SetDirectory[NotebookDirectory[]];
+candidates = {
+  \"data/discussion_medium_20k.wlnet\",
+  \"data/discussion_sft.wlnet\",
+  \"data/discussion_sft_ckpt.wlnet\"};
+sftPath = SelectFirst[candidates, FileExistsQ, None];
+sftNet = If[sftPath === None,
+  Print[Style[\"No trained checkpoint found in data/.  Using untrained \" <>
+              \"trunk; chat widget will produce nonsense.\", Red]];
+  trunk,
+  Print[\"Loading \", sftPath, \" ...\"];
+  Import[sftPath]];
+Information[sftNet, \"ArraysTotalElementCount\"]\
+\>", "Input",
+ CellLabel->
+  "In[102]:=",ExpressionUUID->"5b3a3d28-8923-4926-b66c-e290fc5fe277"],
+
+Cell[BoxData[
+ InterpretationBox[
+  RowBox[{"\<\"Loading \"\>", 
+   "\[InvisibleSpace]", "\<\"data/discussion_medium_20k.wlnet\"\>", 
+   "\[InvisibleSpace]", "\<\" ...\"\>"}],
+  SequenceForm["Loading ", "data/discussion_medium_20k.wlnet", " ..."],
+  Editable->False]], "Print",
+ CellChangeTimes->{3.9883668528251743`*^9},
+ CellLabel->
+  "During evaluation of \
+In[102]:=",ExpressionUUID->"55af3944-f039-447d-a60a-9bc5559ca731"],
+
+Cell[BoxData["354823168"], "Output",
+ CellChangeTimes->{3.988366853712248*^9},
+ CellLabel->
+  "Out[106]=",ExpressionUUID->"afbd5494-f67f-40c4-a9f9-085b41c0df38"]
+}, Open  ]]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["7.  Generation", "Chapter",ExpressionUUID->"154b982d-2906-45ba-a93b-6f61a1fb5992"],
+
+Cell[TextData[{
+ "Sampling is the same recipe as Chapter 6 of the master notebook: ",
+ "temperature + top-k.  ",
+ StyleBox["generate",
+  FontFamily->"Courier"],
+ " also stops cleanly when the model produces ",
+ StyleBox["\\n",
+  FontFamily->"Courier"],
+ StyleBox["User: ",
+  FontFamily->"Courier"],
+ " -- it would otherwise babble onwards into a new turn."
+}], "Text",ExpressionUUID->"740fd2c1-2f04-4ff9-9ab2-61c340fcfe6f"],
+
+Cell[CellGroupData[{
+
+Cell["\<\
+decoderFn = LLMAtoZ`Discussion`makeIdDecoder[gpt];
+SeedRandom[2026];
+LLMAtoZ`Discussion`generate[sftNet, encoder, decoderFn,
+  \"User: What is a sonnet?\\nAssistant:\",
+  <|\"MaxNew\" -> 80, \"Temperature\" -> 0.7, \"TopK\" -> 40|>]\
+\>", "Input",
+ CellLabel->
+  "In[107]:=",ExpressionUUID->"0485e524-1b45-4e35-9b47-acad857ecca9"],
+
+Cell[BoxData["\<\" A sonnet is a piece of music or poetry, written by a \
+person or group of people, typically in praise and praise of nature, and sung \
+to a particular tune. It is a form of communication that is meant to convey a \
+message of gratitude or appreciation, often in praise of the beauty or the \
+harmony of nature.\\n t t t\"\>"], "Output",
+ CellChangeTimes->{3.988366894421597*^9},
+ CellLabel->
+  "Out[109]=",ExpressionUUID->"d84a2129-023a-4545-bd31-444fc48449c3"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["\<\
+LLMAtoZ`Discussion`generate[sftNet, encoder, decoderFn,
+  \"User: How are you today?\\nAssistant:\",
+  <|\"MaxNew\" -> 60, \"Temperature\" -> 0.7|>]\
+\>", "Input",
+ CellLabel->
+  "In[110]:=",ExpressionUUID->"51220bfd-3077-4e8a-bc46-1b93218b13d0"],
+
+Cell[BoxData["\<\" As an AI, I am currently performing my tasks and \
+activities as requested. I am programmed to respond to my users' queries and \
+provide accurate and consistent information.\\n t t t\"\>"], "Output",
+ CellChangeTimes->{3.988366909848542*^9},
+ CellLabel->
+  "Out[110]=",ExpressionUUID->"9b6e74be-d18c-4ab7-910a-e448a31fea65"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["\<\
+LLMAtoZ`Discussion`generate[sftNet, encoder, decoderFn,
+  \"User: Give three tips for staying healthy.\\nAssistant:\",
+  <|\"MaxNew\" -> 120, \"Temperature\" -> 0.7|>]\
+\>", "Input",
+ CellLabel->
+  "In[111]:=",ExpressionUUID->"1727ba69-9d4c-4f15-8a39-bb91d26f5391"],
+
+Cell[BoxData["\<\" 1. Eat a variety of nutrient-dense foods: One of the best \
+ways to stay healthy is to eat a variety of nutrient-dense foods. This \
+includes fruits, vegetables, whole grains, lean proteins, whole grain breads, \
+and whole grain pasta.\\n\\n2. Get enough sleep: Getting enough quality sleep \
+is essential for good health. Aim for at least 7-8 hours of quality sleep \
+every night.\\n\\n3. Get enough physical activity: Physical activity helps to \
+burn calories, build muscle, improve endurance, and maintain good mental \
+health. Aim for at least 20 minutes of moderate\"\>"], "Output",
+ CellChangeTimes->{3.988366979787492*^9},
+ CellLabel->
+  "Out[111]=",ExpressionUUID->"dc40d151-c1f1-4f9e-9831-85096e3ee9af"]
+}, Open  ]]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["8.  Interactive chat widget", "Chapter",ExpressionUUID->"c827809b-f59b-4e66-af13-39cd70e469f9"],
+
+Cell[TextData[{
+ "Multi-turn chat via ",
+ StyleBox["DynamicModule",
+  FontFamily->"Courier"],
+ ".  Each Send concatenates the running transcript with the new user ",
+ "message in the User/Assistant template and feeds it to ",
+ StyleBox["chatTurn",
+  FontFamily->"Courier"],
+ "."
+}], "Text",ExpressionUUID->"fbc5a47a-2d8f-4cb2-80ed-93ff5ee76401"],
+
+Cell[TextData[{
+ "If after clicking ",
+ StyleBox["Send",
+  FontWeight->Bold],
+ " you see ",
+ StyleBox["Thinking\[Ellipsis]",
+  FontSlant->Italic],
+ " for 10\[Dash]60 seconds: that's expected.  GPT-2 small inference ",
+ "in Wolfram Language on a Mac mini CPU runs around 5 tokens/sec, ",
+ "so an 80-token reply takes 15\[Dash]20 s.  GPT-2 medium is even ",
+ "slower (\[TildeTilde]60 s per reply).  When the model finishes, ",
+ "the new turn appears in the transcript pane above the input."
+}], "Text",ExpressionUUID->"6638b2fd-7d47-4641-9997-89b2d76f1feb"],
+
+Cell[CellGroupData[{
+
+Cell["\<\
+DynamicModule[{history = {}, userInput = \"\", thinking = False},
+  Framed[
+    Column[{
+      Style[\"Discussion model \[Bullet] \" <> sftPath, Bold, 14,
+            FontFamily -> \"Helvetica\"],
+      Spacer[8],
+      (* Transcript pane.  Wrap in a Framed Pane so the conversation
+         scrolls.  We rebuild from `history` on every change. *)
+      Framed[
+        Dynamic[
+          If[Length[history] == 0 && !thinking,
+            Style[\"(no messages yet \[Dash] type below and click Send)\",
+                  FontSlant -> Italic, FontColor -> Gray,
+                  FontFamily -> \"Helvetica\"],
+            Column[Join[
+              Map[Function[turn,
+                Column[{
+                  Row[{Style[\"User: \", Bold, FontFamily -> \"Helvetica\"],
+                       Style[turn[\"user\"], FontFamily -> \"Helvetica\"]}],
+                  Row[{Style[\"AI:   \", Bold,
+                             FontFamily -> \"Helvetica\",
+                             FontColor -> RGBColor[0.2, 0.4, 0.7]],
+                       Style[turn[\"assistant\"],
+                             FontFamily -> \"Helvetica\"]}],
+                  Spacer[6]}]], history],
+              If[thinking,
+                {Style[\"AI:   thinking\[Ellipsis]\", Bold,
+                       FontFamily -> \"Helvetica\",
+                       FontColor -> RGBColor[0.5, 0.5, 0.5],
+                       FontSlant -> Italic]}, {}]]]]],
+        Background -> RGBColor[0.97, 0.97, 1.0],
+        FrameStyle -> RGBColor[0.85, 0.85, 0.9],
+        RoundingRadius -> 6, ImageSize -> {640, Automatic},
+        FrameMargins -> 10],
+      Spacer[6],
+      InputField[Dynamic[userInput], String,
+        FieldSize -> {60, 2}, FieldHint -> \"Type your message...\"],
+      Spacer[4],
+      Row[{
+        Button[\"Send\",
+          If[StringQ[userInput] && StringLength[StringTrim[userInput]] > 0,
+            Module[{msg = StringTrim[userInput], reply},
+              userInput = \"\";
+              thinking = True;
+              reply = LLMAtoZ`Discussion`chatTurn[
+                sftNet, history, msg, encoder, decoderFn,
+                <|\"MaxNew\" -> 80, \"Temperature\" -> 0.7, \"TopK\" -> \
+40|>];
+              AppendTo[history, <|\"user\" -> msg,
+                                  \"assistant\" -> StringTrim[reply]|>];
+              thinking = False]],
+          Method -> \"Queued\",
+          Background -> RGBColor[0.2, 0.55, 0.85],
+          BaseStyle -> {FontFamily -> \"Helvetica\", Bold, White}],
+        Spacer[6],
+        Button[\"Reset\", history = {}; userInput = \"\";
+                          thinking = False,
+          Background -> RGBColor[0.9, 0.9, 0.9],
+          BaseStyle -> {FontFamily -> \"Helvetica\"}]
+      }]
+    }],
+    Background -> White,
+    FrameStyle -> RGBColor[0.6, 0.6, 0.65],
+    RoundingRadius -> 8, FrameMargins -> 14]
+]\
+\>", "Input",
+ CellLabel->
+  "In[112]:=",ExpressionUUID->"aa28c299-995b-484f-ac1e-9d0866f3f4a9"],
+
+Cell[BoxData[
+ DynamicModuleBox[{$CellContext`history$$ = {<|
+   "user" -> "What is an internal combustion engine?", "assistant" -> 
+    "An internal combustion engine is an engine that produces power by using \
+both internal combustion (or combustion) and mechanical power. It is a type \
+of engine that uses the kinetic energy produced by the motion of an object \
+through a process of combustion. This kinetic energy is used to move the \
+piston or cylinder, and the kinetic energy of the fuel or oxidizer that is in \
+use is used to propel an object."|>}, $CellContext`userInput$$ = 
+  "", $CellContext`thinking$$ = False}, 
+  FrameBox[
+   TagBox[GridBox[{
+      {
+       StyleBox["\<\"Discussion model \[Bullet] \
+data/discussion_medium_20k.wlnet\"\>",
+        StripOnInput->False,
+        FontFamily->"Helvetica",
+        FontSize->14,
+        FontWeight->Bold]},
+      {
+       TemplateBox[{8},
+        "Spacer1"]},
+      {
+       FrameBox[
+        DynamicBox[ToBoxes[
+          If[
+           And[Length[$CellContext`history$$] == 0, 
+            Not[$CellContext`thinking$$]], 
+           Style[
+           "(no messages yet \[Dash] type below and click Send)", FontSlant -> 
+            Italic, FontColor -> Gray, FontFamily -> "Helvetica"], 
+           Column[
+            Join[
+             Map[
+              Function[$CellContext`turn, 
+               Column[{
+                 Row[{
+                   Style["User: ", Bold, FontFamily -> "Helvetica"], 
+                   Style[
+                    $CellContext`turn["user"], FontFamily -> "Helvetica"]}], 
+                 Row[{
+                   Style[
+                   "AI:   ", Bold, FontFamily -> "Helvetica", FontColor -> 
+                    RGBColor[0.2, 0.4, 0.7]], 
+                   Style[
+                    $CellContext`turn["assistant"], FontFamily -> 
+                    "Helvetica"]}], 
+                 Spacer[6]}]], $CellContext`history$$], 
+             If[$CellContext`thinking$$, {
+               Style[
+               "AI:   thinking\[Ellipsis]", Bold, FontFamily -> "Helvetica", 
+                FontColor -> RGBColor[0.5, 0.5, 0.5], FontSlant -> 
+                Italic]}, {}]]]], StandardForm],
+         ImageSizeCache->{618., {73.71717863918842, 79.44911223293842}}],
+        Background->RGBColor[0.97, 0.97, 1.],
+        FrameMargins->10,
+        FrameStyle->RGBColor[0.85, 0.85, 0.9],
+        ImageSize->{640, Automatic},
+        RoundingRadius->6,
+        StripOnInput->False]},
+      {
+       TemplateBox[{6},
+        "Spacer1"]},
+      {
+       InputFieldBox[Dynamic[$CellContext`userInput$$], String,
+        FieldHint->"Type your message...",
+        FieldSize->{60, 2}]},
+      {
+       TemplateBox[{4},
+        "Spacer1"]},
+      {
+       TemplateBox[{
+         ButtonBox["\"Send\"", ButtonFunction :> If[
+            And[
+             StringQ[$CellContext`userInput$$], StringLength[
+               StringTrim[$CellContext`userInput$$]] > 0], 
+            
+            Module[{$CellContext`msg$ = 
+              StringTrim[$CellContext`userInput$$], $CellContext`reply$}, \
+$CellContext`userInput$$ = ""; $CellContext`thinking$$ = 
+              True; $CellContext`reply$ = 
+              LLMAtoZ`Discussion`chatTurn[$CellContext`sftNet, \
+$CellContext`history$$, $CellContext`msg$, $CellContext`encoder, \
+$CellContext`decoderFn, <|
+                "MaxNew" -> 80, "Temperature" -> 0.7, "TopK" -> 40|>]; 
+             AppendTo[$CellContext`history$$, <|
+               "user" -> $CellContext`msg$, "assistant" -> 
+                StringTrim[$CellContext`reply$]|>]; $CellContext`thinking$$ = 
+              False]], Method -> "Queued", Background -> 
+          RGBColor[0.2, 0.55, 0.85], 
+          BaseStyle -> {FontFamily -> "Helvetica", Bold, 
+            GrayLevel[1]}, Appearance -> Automatic, Evaluator -> Automatic], 
+         TemplateBox[{6}, "Spacer1"], 
+         ButtonBox[
+         "\"Reset\"", 
+          ButtonFunction :> ($CellContext`history$$ = {}; \
+$CellContext`userInput$$ = ""; $CellContext`thinking$$ = False), Background -> 
+          RGBColor[0.9, 0.9, 0.9], BaseStyle -> {FontFamily -> "Helvetica"}, 
+          Appearance -> Automatic, Evaluator -> Automatic, Method -> 
+          "Preemptive"]},
+        "RowDefault"]}
+     },
+     DefaultBaseStyle->"Column",
+     GridBoxAlignment->{"Columns" -> {{Left}}},
+     GridBoxItemSize->{"Columns" -> {{Automatic}}, "Rows" -> {{Automatic}}}],
+    "Column"],
+   Background->GrayLevel[1],
+   FrameMargins->14,
+   FrameStyle->RGBColor[0.6, 0.6, 0.65],
+   RoundingRadius->8,
+   StripOnInput->False],
+  DynamicModuleValues:>{}]], "Output",
+ CellChangeTimes->{3.988366979826947*^9},
+ CellLabel->
+  "Out[112]=",ExpressionUUID->"400db614-1c97-40bf-8c1d-4c4bbfe38b88"]
+}, Open  ]]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["9.  Limits and where to go", "Chapter",ExpressionUUID->"9763cadb-d1b5-431c-be6f-1f75a92cf2b2"],
+
+Cell["\<\
+This 124M model SFT'd for 3 epochs holds the chat format and gives plausible \
+responses to general questions.  It will not pass a Turing test, and its \
+factual accuracy is only as good as Alpaca's: many details are wrong.  The \
+next levers, in order of impact per hour:\
+\>", "Text",ExpressionUUID->"253442f4-8a76-4c35-9d37-8d2ea19a411b"],
+
+Cell[TextData[{
+ "1. ",
+ StyleBox["More data + a chattier dataset.",
+  FontWeight->Bold],
+ " SmolTalk (HuggingFace, ~150k multi-turn dialogues) is a much better ",
+ "fit for chat than Alpaca's single-turn instructions.\n",
+ "2. ",
+ StyleBox["Bigger base via cloud.",
+  FontWeight->Bold],
+ " GPT-2 medium (345M) or large (774M) SFT'd via RemoteBatchSubmit on ",
+ "the same data; budget ~\[Sterling]30-100.\n",
+ "3. ",
+ StyleBox["RL post-training.",
+  FontWeight->Bold],
+ " Apply the GRPO step from Chapter 8 of the master with a quality ",
+ "reward (e.g., a small judge model that scores helpfulness).\n",
+ "4. ",
+ StyleBox["Modern instruct base.",
+  FontWeight->Bold],
+ " For a model that genuinely chats, the only fast path is pulling a ",
+ "post-2024 instruction-tuned model (SmolLM2-360M-Instruct, Qwen2.5-",
+ "0.5B-Instruct) via ONNX.  Tradeoff: breaks the from-scratch story."
+}], "Text",ExpressionUUID->"7204ee74-545d-4535-bc9b-4a0c34dab18f"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["References", "Chapter",ExpressionUUID->"d37cfbe9-2c3e-46ac-8f48-c9d5dd3c5c7e"],
+
+Cell["\<\
+Radford, A. et al. (2019). Language Models are Unsupervised Multitask \
+Learners. (GPT-2.)
+Taori, R. et al. (2023). Stanford Alpaca: An Instruction-Following LLaMA Model.
+Yahma. (2023). alpaca-cleaned (HuggingFace dataset, Apache 2.0).\
+\>", "Text",ExpressionUUID->"cb23c3af-d2f3-4596-9c69-306550659af9"]
+}, Open  ]]
+}, Open  ]]
+},
+Saveable->True,
+WindowSize->{1266, 919},
+WindowMargins->{{4, Automatic}, {Automatic, 4}},
+FrontEndVersion->"15.0 for Mac OS X ARM (64-bit) (October 27, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"e2285e22-2fa5-4649-b5ec-99fbbd5be1f8"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[CellGroupData[{
+Cell[576, 22, 108, 0, 96, "Title",ExpressionUUID->"dfeb9171-a06d-4050-a294-0027267bc8c2"],
+Cell[687, 24, 130, 0, 52, "Subtitle",ExpressionUUID->"7df988a9-873e-461e-86a3-67736e03b8db"],
+Cell[820, 26, 712, 12, 121, "Text",ExpressionUUID->"7cf2b1bd-1b09-419e-8e4c-5cdcd7b8bdb4"],
+Cell[1535, 40, 105, 0, 33, "Text",ExpressionUUID->"bc8fb34e-3684-47f3-9fae-fc38cde961b2"],
+Cell[1643, 42, 1107, 23, 186, "Text",ExpressionUUID->"b5bc1457-4923-4d9c-8da5-ca0bdd008553"],
+Cell[CellGroupData[{
+Cell[2775, 69, 83, 0, 67, "Chapter",ExpressionUUID->"1b675355-7a44-4889-bc77-dc123ca4d63f"],
+Cell[CellGroupData[{
+Cell[2883, 73, 129, 1, 29, "Input",ExpressionUUID->"ff311b9e-31de-42d4-b3d1-e047ca12a903"],
+Cell[3015, 76, 211, 3, 33, "Output",ExpressionUUID->"9d0037a3-6dd0-4778-ab81-8d3ab54ab5ef"]
+}, Open  ]],
+Cell[3241, 82, 122, 1, 29, "Input",ExpressionUUID->"300ab9ff-b14f-41db-a004-112f6195f476"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[3400, 88, 106, 0, 67, "Chapter",ExpressionUUID->"5767c193-6d02-43f8-b642-3a64558f80f3"],
+Cell[3509, 90, 235, 4, 55, "Text",ExpressionUUID->"a983779c-5610-42d4-9b3d-fd6f67ac8800"],
+Cell[CellGroupData[{
+Cell[3769, 98, 191, 4, 46, "Input",ExpressionUUID->"45488597-c03f-49ad-9a9e-38ebf1196cc4"],
+Cell[3963, 104, 159, 2, 33, "Output",ExpressionUUID->"eb2d39e7-4870-49b4-b9dc-577030fc777d"]
+}, Open  ]],
+Cell[4137, 109, 116, 0, 33, "Text",ExpressionUUID->"22ad1d51-b52f-4d63-89a6-c39204506491"],
+Cell[CellGroupData[{
+Cell[4278, 113, 123, 1, 29, "Input",ExpressionUUID->"3db38c8e-29e1-4f78-b320-f39d497d909d"],
+Cell[4404, 116, 310, 6, 33, "Output",ExpressionUUID->"03cf69dc-26d3-4b98-9a78-21f2bbe7bc17"]
+}, Open  ]],
+Cell[4729, 125, 88, 0, 33, "Text",ExpressionUUID->"090c7d36-c8c4-4350-9121-7f80d091e9d6"],
+Cell[4820, 127, 684, 19, 77, "Text",ExpressionUUID->"46a57518-f161-4176-bbb3-6a87b488e2db"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[5541, 151, 123, 0, 67, "Chapter",ExpressionUUID->"295a91ca-9b90-4391-bc64-d0bfe246f2d0"],
+Cell[5667, 153, 145, 2, 33, "Text",ExpressionUUID->"ae4c75db-a411-4638-b784-801060510b96"],
+Cell[5815, 157, 750, 22, 121, "Text",ExpressionUUID->"57a31bd7-37a3-4ce3-b2c9-ad56246ab0f1"],
+Cell[CellGroupData[{
+Cell[6590, 183, 204, 4, 46, "Input",ExpressionUUID->"d2df4391-2825-4c2e-96db-de5cd233af5a"],
+Cell[6797, 189, 157, 2, 33, "Output",ExpressionUUID->"f3e24c8a-636f-43d5-90f4-b1364037b8fd"]
+}, Open  ]],
+Cell[6969, 194, 230, 4, 55, "Text",ExpressionUUID->"3f450775-e6e1-4029-8374-332e7c18da08"],
+Cell[CellGroupData[{
+Cell[7224, 202, 331, 8, 116, "Input",ExpressionUUID->"17be58c4-6c80-4634-b7ae-0012f9b868f0"],
+Cell[CellGroupData[{
+Cell[7580, 214, 482, 12, 23, "Print",ExpressionUUID->"69d96a79-f15e-470d-b322-c12e6f2fcf7d"],
+Cell[8065, 228, 371, 10, 23, "Print",ExpressionUUID->"d6035edb-b6bf-42de-9514-11a5a42dd3ba"]
+}, Open  ]]
+}, Open  ]],
+Cell[8463, 242, 180, 3, 33, "Text",ExpressionUUID->"49237287-9adb-45e0-95d8-ba1cc08ae858"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[8680, 250, 105, 0, 67, "Chapter",ExpressionUUID->"7d3a0225-a24f-4c38-8663-aa6f68bcfc81"],
+Cell[8788, 252, 457, 13, 55, "Text",ExpressionUUID->"b33f1d5d-e8a0-45a5-ae23-826b33ee5487"],
+Cell[CellGroupData[{
+Cell[9270, 269, 287, 6, 81, "Input",ExpressionUUID->"b53626e2-01c2-4468-8f55-e69e3e11330a"],
+Cell[9560, 277, 6713, 116, 574, "Output",ExpressionUUID->"f1a94957-3732-4f6c-bbe3-d9b04b274858"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[16310, 398, 140, 1, 29, "Input",ExpressionUUID->"b613f374-de53-4b7b-bda0-6152586732a4"],
+Cell[16453, 401, 999, 13, 237, "Output",ExpressionUUID->"98ec5dec-1a74-42c7-8719-bc16e3022130"]
+}, Open  ]],
+Cell[17467, 417, 205, 3, 33, "Text",ExpressionUUID->"c518810f-6e20-4d7b-af01-63ae249f2487"],
+Cell[CellGroupData[{
+Cell[17697, 424, 378, 8, 116, "Input",ExpressionUUID->"677f0746-2f03-40ae-9107-a33a8caeead6"],
+Cell[CellGroupData[{
+Cell[18100, 436, 303, 8, 23, "Print",ExpressionUUID->"2a0ed1f0-712f-4ddf-914f-dd7d7be0d01d"],
+Cell[18406, 446, 433, 9, 23, "Print",ExpressionUUID->"e14ca26d-5cce-4c92-90f4-dfcfd5d50a0b"]
+}, Open  ]]
+}, Open  ]]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[18900, 462, 103, 0, 67, "Chapter",ExpressionUUID->"e91f2191-0805-4581-9000-9a1cd69fde6a"],
+Cell[19006, 464, 523, 13, 55, "Text",ExpressionUUID->"9bfc1b19-b967-40f2-bd5d-0d49b29cccdd"],
+Cell[19532, 479, 188, 3, 33, "Text",ExpressionUUID->"233018a3-01a7-43e7-ab08-34048fdfe9f6"],
+Cell[19723, 484, 207, 3, 64, "Program",ExpressionUUID->"44e166ef-6222-40a3-8516-f07e5600a323"],
+Cell[19933, 489, 237, 4, 33, "Text",ExpressionUUID->"18dc4aa0-2c38-4a9c-bd3b-ac659093fccf"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[20207, 498, 100, 0, 67, "Chapter",ExpressionUUID->"9dcf73a3-6641-44fd-986c-482fb9fe7f68"],
+Cell[20310, 500, 520, 11, 55, "Text",ExpressionUUID->"e97f22f6-f324-4345-863d-807c00e0ac33"],
+Cell[CellGroupData[{
+Cell[20855, 515, 618, 16, 237, "Input",ExpressionUUID->"5b3a3d28-8923-4926-b66c-e290fc5fe277"],
+Cell[21476, 533, 427, 10, 23, "Print",ExpressionUUID->"55af3944-f039-447d-a60a-9bc5559ca731"],
+Cell[21906, 545, 161, 3, 33, "Output",ExpressionUUID->"afbd5494-f67f-40c4-a9f9-085b41c0df38"]
+}, Open  ]]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[22116, 554, 88, 0, 67, "Chapter",ExpressionUUID->"154b982d-2906-45ba-a93b-6f61a1fb5992"],
+Cell[22207, 556, 423, 11, 55, "Text",ExpressionUUID->"740fd2c1-2f04-4ff9-9ab2-61c340fcfe6f"],
+Cell[CellGroupData[{
+Cell[22655, 571, 340, 8, 98, "Input",ExpressionUUID->"0485e524-1b45-4e35-9b47-acad857ecca9"],
+Cell[22998, 581, 480, 7, 94, "Output",ExpressionUUID->"d84a2129-023a-4545-bd31-444fc48449c3"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[23515, 593, 256, 6, 64, "Input",ExpressionUUID->"51220bfd-3077-4e8a-bc46-1b93218b13d0"],
+Cell[23774, 601, 344, 5, 74, "Output",ExpressionUUID->"9b6e74be-d18c-4ab7-910a-e448a31fea65"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[24155, 611, 275, 6, 64, "Input",ExpressionUUID->"1727ba69-9d4c-4f15-8a39-bb91d26f5391"],
+Cell[24433, 619, 732, 10, 155, "Output",ExpressionUUID->"dc40d151-c1f1-4f9e-9831-85096e3ee9af"]
+}, Open  ]]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[25214, 635, 101, 0, 67, "Chapter",ExpressionUUID->"c827809b-f59b-4e66-af13-39cd70e469f9"],
+Cell[25318, 637, 345, 9, 33, "Text",ExpressionUUID->"fbc5a47a-2d8f-4cb2-80ed-93ff5ee76401"],
+Cell[25666, 648, 555, 12, 55, "Text",ExpressionUUID->"6638b2fd-7d47-4641-9997-89b2d76f1feb"],
+Cell[CellGroupData[{
+Cell[26246, 664, 2958, 68, 1121, "Input",ExpressionUUID->"aa28c299-995b-484f-ac1e-9d0866f3f4a9"],
+Cell[29207, 734, 4735, 114, 382, "Output",ExpressionUUID->"400db614-1c97-40bf-8c1d-4c4bbfe38b88"]
+}, Open  ]]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[33991, 854, 100, 0, 67, "Chapter",ExpressionUUID->"9763cadb-d1b5-431c-be6f-1f75a92cf2b2"],
+Cell[34094, 856, 351, 5, 55, "Text",ExpressionUUID->"253442f4-8a76-4c35-9d37-8d2ea19a411b"],
+Cell[34448, 863, 948, 22, 121, "Text",ExpressionUUID->"7204ee74-545d-4535-bc9b-4a0c34dab18f"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[35433, 890, 84, 0, 67, "Chapter",ExpressionUUID->"d37cfbe9-2c3e-46ac-8f48-c9d5dd3c5c7e"],
+Cell[35520, 892, 314, 5, 77, "Text",ExpressionUUID->"cb23c3af-d2f3-4596-9c69-306550659af9"]
+}, Open  ]]
+}, Open  ]]
+}
+]
+*)
+

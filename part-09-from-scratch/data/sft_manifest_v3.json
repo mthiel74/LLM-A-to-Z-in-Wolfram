@@ -1,0 +1,16 @@
+{
+  "runPrefix": "runs/sft-30M-v3",
+  "shardKeys": [
+    "runs/sft-30M-v2/shards/s00.bin",
+    "runs/sft-30M-v2/shards/s00.bin",
+    "runs/sft-30M-v2/shards/s00.bin"
+  ],
+  "trainSecsPerChunk": 0,
+  "seqLen": 512,
+  "vocab": 50257,
+  "batchSize": 8,
+  "freshStart": true,
+  "baseKey": "runs/pretrain-30M-v3/ckpt.wlnet",
+  "lrMax": 0.0002,
+  "lrMin": 2e-05
+}

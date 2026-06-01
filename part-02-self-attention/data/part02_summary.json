@@ -1,0 +1,35 @@
+{
+	"varianceDks":[
+		16,
+		64,
+		256
+	],
+	"varianceUnscaledStds":{
+		"16":4.068883712035834,
+		"64":7.986900737508701,
+		"256":1.6423123583234506e1
+	},
+	"varianceScaledStds":{
+		"16":1.0172209280089586,
+		"64":0.9983625921885876,
+		"256":1.0264452239521566
+	},
+	"prompt":"The quick brown fox jumps over the lazy dog",
+	"tokenIds":[
+		209,
+		1813,
+		7331,
+		21576,
+		17790,
+		370,
+		7,
+		16676,
+		3035
+	],
+	"featuredLayer":5,
+	"headPicks":{
+		"prev":1,
+		"self":8,
+		"spread":3
+	}
+}

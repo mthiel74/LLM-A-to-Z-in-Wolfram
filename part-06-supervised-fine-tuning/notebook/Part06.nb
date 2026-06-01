@@ -1,0 +1,444 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[     19201,        435]
+NotebookOptionsPosition[     14881,        378]
+NotebookOutlinePosition[     15238,        394]
+CellTagsIndexPosition[     15195,        391]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell["\<\
+Build a Large Language Model from Scratch \[LongDash] in Wolfram Language\
+\>", "Title",ExpressionUUID->"695c24c3-a4fb-4b3a-85c2-d47cae9d2582"],
+
+Cell["Part 6: Supervised fine-tuning (instruction following)", "Subtitle",ExpressionUUID->"1fe8f2ed-30f4-40e0-ba22-feebe83fd3b1"],
+
+Cell[TextData[{
+ "The model after Part 4 can continue Shakespeare \[LongDash] but it has ",
+ "no concept of \[OpenCurlyDoubleQuote]a user asks a question, an assistant \
+answers\[CloseCurlyDoubleQuote]. ",
+ "Supervised fine-tuning teaches that concept by training the same ",
+ "next-token loss on a dataset where the inputs are already formatted ",
+ "in the chat template ",
+ StyleBox["<|user|>...<|assistant|>...<|eot|>",
+  FontFamily->"Courier"],
+ ". The same ",
+ StyleBox["NetTrain",
+  FontFamily->"Courier"],
+ " call we used in Part 4, on different data."
+}], "Text",ExpressionUUID->"693a7c5a-efe8-43a9-b8b0-0e560454ed45"],
+
+Cell["1.  Setup and chat-format vocabulary", "Section",ExpressionUUID->"87de9c7f-c89b-4268-a203-9d7f707e8724"],
+
+Cell["SetDirectory[NotebookDirectory[]]", "Input",ExpressionUUID->"0c52bdf6-b617-4e95-b20a-c51d170ba70e"],
+
+Cell["\<\
+Get[\"../../part-01-tokeniser-and-embeddings/src/Tokeniser.wl\"]
+Get[\"../../part-02-self-attention/src/Attention.wl\"]
+Get[\"../../part-03-transformer-block/src/Transformer.wl\"]
+Get[\"../../part-04-pretraining/src/Training.wl\"]
+Get[\"src/SFT.wl\"]\
+\>", "Input",ExpressionUUID->"963e8bab-735b-4692-85c9-f68b33abbc62"],
+
+Cell[TextData[{
+ "We add three special tokens to the BPE vocabulary, after the BPE ",
+ "merges learned in Part 1: ",
+ StyleBox["<|user|>",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["<|assistant|>",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["<|eot|>",
+  FontFamily->"Courier"],
+ ". Their IDs land at the end of the embedding matrix; the rest of the ",
+ "vocabulary keeps its pretrained rows."
+}], "Text",ExpressionUUID->"7de0251c-cb1e-465d-a396-384f7a34e094"],
+
+Cell["\<\
+bpe = Import[\"../../part-01-tokeniser-and-embeddings/data/bpe_trained.mx\"];
+baseVocab = LLMAtoZ`Tokeniser`buildBPEVocabulary[bpe];
+chatVocab = LLMAtoZ`SFT`extendVocabulary[baseVocab];
+tokId = AssociationThread[chatVocab -> Range[Length[chatVocab]]];
+{Length[baseVocab], Length[chatVocab]}\
+\>", "Input",ExpressionUUID->"248bbd97-74fd-4b35-ba76-8c81eb27343a"],
+
+Cell["2.  The chat template", "Section",ExpressionUUID->"9b36f43b-3adf-48c5-bb5f-aca2257b1a87"],
+
+Cell["\<\
+Every turn in the training data is formatted into a single string with the \
+special tokens marking role boundaries:\
+\>", "Text",ExpressionUUID->"622a5395-9d54-4997-9df1-d8db492f5400"],
+
+Cell["\<\
+LLMAtoZ`SFT`formatConversation[\"What is a sonnet?\",
+  \"A sonnet is a poem of fourteen lines.\"]\
+\>", "Input",ExpressionUUID->"53321c59-347f-4b2b-b545-715f6cbe76e1"],
+
+Cell["\<\
+row = LLMAtoZ`SFT`tokeniseConversation[\"What is a sonnet?\",
+  \"A sonnet is a poem of fourteen lines.\", bpe[\"MergeRules\"], tokId];
+{Length[row[\"ids\"]], Total[row[\"assistantMask\"]]}\
+\>", "Input",ExpressionUUID->"65859d17-eedd-4e8a-aca9-97ceaae4bf3e"],
+
+Cell["3.  The toy instruction dataset", "Section",ExpressionUUID->"9e07d8d2-9d51-42e1-bade-64e97e898c70"],
+
+Cell["\<\
+Twenty hand-written Shakespeare-themed {user, assistant} pairs ship with the \
+package. Just enough to demonstrate SFT end to end on the Mac mini; the same \
+code consumes the SmolTalk subset when scaled up via the cloud path.\
+\>", "Text",ExpressionUUID->"3e1957c6-e4de-46ea-8f27-af2b7d63e161"],
+
+Cell["LLMAtoZ`SFT`toyInstructionDataset[][[1 ;; 4]]", "Input",ExpressionUUID->"c38b4be4-9b47-4fab-9a89-4904c05f3788"],
+
+Cell["4.  Expand the model and train", "Section",ExpressionUUID->"4686f59e-56ee-42d5-b592-82cee301baa8"],
+
+Cell["\<\
+Load the pretrained model from Part 4, expand its token-embedding and output \
+projection to the new chat vocab size (adding random rows for the three \
+special tokens), then run a short SFT pass.\
+\>", "Text",ExpressionUUID->"33d40ece-7c89-492a-ba96-6ab98a8c37c5"],
+
+Cell["\<\
+pretrained = Import[
+  \"../../part-04-pretraining/data/tiny_gpt_trained.wlnet\"];
+expanded = LLMAtoZ`SFT`expandModelVocabulary[pretrained, Length[chatVocab]];\
+\>", "Input",ExpressionUUID->"84018241-6eee-440d-bcb3-df0d6c1f3533"],
+
+Cell["\<\
+dataset = LLMAtoZ`SFT`prepareSftDataset[
+  LLMAtoZ`SFT`toyInstructionDataset[],
+  bpe[\"MergeRules\"], tokId, 64];
+Length[dataset]\
+\>", "Input",ExpressionUUID->"c002849c-8ce2-485d-b0e2-5d8214f12a22"],
+
+Cell["\<\
+sftResult = LLMAtoZ`SFT`trainSft[expanded, dataset,
+  <|\"BaseLR\" -> 0.0005, \"MaxRounds\" -> 8, \"BatchSize\" -> 4|>];
+{sftResult[\"FinalLoss\"], sftResult[\"WallSeconds\"]}\
+\>", "Input",ExpressionUUID->"ba34f697-a941-4304-aec1-5cb27a1bda4c"],
+
+Cell["5.  Generate a response", "Section",ExpressionUUID->"ae5ead56-8bdf-42c1-92d9-1ab3923ae2ce"],
+
+Cell["\<\
+Same sampling code as in Part 5, but the model now produces text in the SFT \
+chat template, so we stop at <|eot|>.\
+\>", "Text",ExpressionUUID->"b88cd3d4-bc5a-4993-a40f-593524174f22"],
+
+Cell["\<\
+sftSample[net_, q_String, T_:0.8] := Module[
+  {ids, ctx, pos, logits, p, sampled, contextLen = 64,
+   eotId = tokId[\"<|eot|>\"],
+   idTok = AssociationThread[Range[Length[chatVocab]] -> chatVocab]},
+  ids = Lookup[tokId,
+    LLMAtoZ`Tokeniser`bpeEncode[
+      \"<|user|>\" <> q <> \"<|assistant|>\", bpe[\"MergeRules\"]]];
+  (* fall back via lookup loop *)
+  Do[
+    ctx = If[Length[ids] >= contextLen, ids[[-contextLen ;;]],
+              PadRight[ids, contextLen, 1]];
+    pos = Min[Length[ids], contextLen];
+    logits = net[ctx][[pos]];
+    p = Exp[(logits - Max[logits])/T]; p = p/Total[p];
+    sampled = RandomChoice[p -> Range[Length[p]]];
+    AppendTo[ids, sampled];
+    If[sampled === eotId, Break[]],
+    {60}];
+  StringReplace[StringJoin @ Lookup[idTok, ids],
+    {\"</w>\" -> \" \", \"<|user|>\" -> \"\\nUSER: \",
+     \"<|assistant|>\" -> \"\\nASSISTANT: \", \"<|eot|>\" -> \"\"}]
+];
+sftSample[sftResult[\"Net\"], \"What is a sonnet?\"]\
+\>", "Input",ExpressionUUID->"369b702b-dcba-4ae7-b96b-f2d990a0a8bd"],
+
+Cell["6.  Parameter-efficient SFT with LoRA", "Section",ExpressionUUID->"dac5fd5e-26e5-4011-9451-14a54d080204"],
+
+Cell[TextData[{
+ "Full SFT updates every weight in the pretrained model. ",
+ StyleBox["LoRA",
+  FontWeight->Bold],
+ " (Hu et al. 2021) updates a tiny fraction. The trick: for each ",
+ "linear layer with weight ",
+ Cell[BoxData["W"], "Text",
+  FontSize->14,ExpressionUUID->"635dbcbb-9ea0-45ff-b4cb-d364ab942203"],
+ " of shape ",
+ Cell[BoxData[
+  RowBox[{
+   SubscriptBox["d", "in"], "\[Times]", 
+   SubscriptBox["d", "out"]}]], "Text",
+  FontSize->14,ExpressionUUID->"764f6dcc-c4be-48e7-9ece-17c0e2cda9b3"],
+ ", freeze ",
+ Cell[BoxData["W"], "Text",
+  FontSize->14,ExpressionUUID->"47e40a59-644c-408b-9e49-856783a779af"],
+ " and learn two small matrices ",
+ Cell[BoxData["A"], "Text",
+  FontSize->14,ExpressionUUID->"bc53e6cd-6c67-4ecf-ae06-c77347c72c9b"],
+ " and ",
+ Cell[BoxData["B"], "Text",
+  FontSize->14,ExpressionUUID->"82420381-a66b-4750-bce5-2ef484819615"],
+ " of ranks ",
+ Cell[BoxData["r"], "Text",
+  FontSize->14,ExpressionUUID->"704a928f-820d-441d-a8d0-d177c90e61eb"],
+ " so the effective weight at inference is ",
+ Cell[BoxData[
+  RowBox[{"W", "+", "BA"}]], "Text",
+  FontSize->14,ExpressionUUID->"1bfe8b12-de1b-45ed-8ee8-17660062c23a"],
+ ". For r = 8 and ",
+ Cell[BoxData[
+  RowBox[{"d", " ", "=", " ", "768"}]], "Text",
+  FontSize->14,ExpressionUUID->"c9d5a130-04b9-4a7e-96f1-2a7169cd722f"],
+ ", LoRA adds ",
+ Cell[BoxData[
+  RowBox[{"8", "\[Times]", "(", "768", "+", "768", ")", "=", "12288"}]], 
+  "Text",
+  FontSize->14,ExpressionUUID->"2cf8519d-cc3f-4ad4-aa25-7205f7522ed2"],
+ " parameters versus the full ",
+ Cell[BoxData[
+  RowBox[{
+   RowBox[{
+    RowBox[{"768", "\[Times]", "768"}], " ", "=", " ", "589"}], ",", "824"}]],
+   "Text",
+  FontSize->14,ExpressionUUID->"dcf887b0-d2c1-463b-9690-1138ec1269ac"],
+ " \[LongDash] a 48\[Times] reduction."
+}], "Text",ExpressionUUID->"2b76f4c6-dbc7-4ee4-92d4-ee5b54cc2ffa"],
+
+Cell["Get[\"src/Lora.wl\"]", "Input",ExpressionUUID->"b7e7da3e-7a1a-49c0-91da-1a5885bbebb7"],
+
+Cell["\<\
+(* Build a small LoRA delta and confirm zero-init identity. *)
+delta = LLMAtoZ`Lora`loraDelta[64, 64, 8];
+Print[\"loraDelta params: \", Information[delta, \"ArraysTotalElementCount\"]];
+Print[\"vs full LinearLayer params: \", 64*64]\
+\>", "Input",ExpressionUUID->"4ca7c23c-d1dd-4c54-8623-887e23c30f43"],
+
+Cell["\<\
+LLMAtoZ`Lora`loraParameterCount[768, 768, #] & /@ {4, 8, 16, 32, 64}\
+\>", "Input",ExpressionUUID->"60668125-e520-4733-a931-6bdd74671a00"],
+
+Cell[TextData[{
+ "Compare to the full per-attention-block parameter count of ",
+ Cell[BoxData[
+  RowBox[{"4", 
+   SuperscriptBox[
+    SubscriptBox["d", "model"], "2"]}]], "Text",
+  FontSize->14,ExpressionUUID->"7cc4421b-1635-4f16-9ea5-d600525a8fd8"],
+ " = 4\[Times]768\[Times]768 \[TildeEqual] 2.36M parameters: even ",
+ "rank-64 LoRA on all four QKV+output projections costs only ",
+ "~100K parameters per layer, a >20\[Times] saving. With 12 layers ",
+ "that is ~1.2M trainable LoRA parameters vs ~28M in full SFT."
+}], "Text",ExpressionUUID->"06da4d86-eddf-400a-ac2d-3a67e2c3c566"],
+
+Cell[BoxData[
+ $CellContext`subsection["6.1  Interactive: choose your LoRA rank"]], "Input",\
+ExpressionUUID->"bf094817-bd33-4a9f-b718-fad8156a2d69"],
+
+Cell["\<\
+Manipulate[
+  With[{loraPer = LLMAtoZ`Lora`loraParameterCount[768, 768, r],
+        fullPer = 768*768},
+    Column[{
+      Style[Row[{\"LoRA params per linear: \", loraPer}], 14, Bold],
+      Style[Row[{\"Full linear params:     \", fullPer}], 12],
+      Style[Row[{\"Savings: \",
+        NumberForm[100. (1 - loraPer/fullPer), 4], \"%\"}], 12, Gray]
+    }]
+  ],
+  {{r, 8, \"LoRA rank\"}, 1, 128, 1, Appearance -> \"Labeled\"},
+  ControlPlacement -> Top]\
+\>", "Input",ExpressionUUID->"dc9ea766-d97b-48a1-9e54-deb000bd659b"],
+
+Cell["7.  Classification fine-tuning (Raschka chapter 6)", "Section",ExpressionUUID->"e4c2690b-cdec-453a-94bd-17fece1b4820"],
+
+Cell[TextData[{
+ "Same pretrained model, very different task: ",
+ StyleBox["classification.",
+  FontSlant->Italic],
+ " Instead of producing the next token, output a single ",
+ "class label given the whole sequence. The architectural change is ",
+ "tiny: strip the LM head (per-position vocab projection), add a ",
+ StyleBox["SequenceLastLayer",
+  FontFamily->"Courier"],
+ " to pool the hidden state at the final position, then a fresh ",
+ StyleBox["LinearLayer[nClasses]",
+  FontFamily->"Courier"],
+ ". The rest of the model \[LongDash] all the pretrained ",
+ "transformer blocks \[LongDash] is reused as-is."
+}], "Text",ExpressionUUID->"08a801de-2b75-4fb3-b3f1-8ec8fd3dda3e"],
+
+Cell["Get[\"src/Classification.wl\"]", "Input",ExpressionUUID->"307c5546-ccb9-4df0-8a3d-4c1a5921ffc6"],
+
+Cell["\<\
+classifier = LLMAtoZ`Classification`attachClassifier[
+  pretrained, 2, 96];
+classifier\
+\>", "Input",ExpressionUUID->"55eb5d57-a101-4837-a1f2-ca8585cf2fc1"],
+
+Cell["\<\
+Demo task: classify Shakespeare excerpts as tragedy (1) or comedy (2). The \
+package ships a 20-pair hand-curated dataset for the demo; the same code \
+consumes IMDb-sentiment or AG News if you supply them.\
+\>", "Text",ExpressionUUID->"9b6d388f-537c-403d-bc82-c67097f977e5"],
+
+Cell["\<\
+clsData = LLMAtoZ`Classification`prepareClassificationDataset[
+  LLMAtoZ`Classification`shakespeareGenreLabels[],
+  bpe[\"MergeRules\"], tokId, 64];
+Length[clsData]\
+\>", "Input",ExpressionUUID->"9763d913-b300-45b6-aba5-4a31b82bc3b6"],
+
+Cell["\<\
+clsResult = LLMAtoZ`Classification`trainClassifier[
+  classifier, clsData,
+  <|\"BaseLR\" -> 0.001, \"MaxRounds\" -> 6, \"BatchSize\" -> 4|>];
+{clsResult[\"FinalLoss\"], clsResult[\"WallSeconds\"]}\
+\>", "Input",ExpressionUUID->"522ba51a-0035-4bb8-9ad6-4a2f3b1676ee"],
+
+Cell["\<\
+LLMAtoZ`Classification`classifySample[clsResult[\"Net\"],
+  LLMAtoZ`Classification`prepareClassificationDataset[
+    {{\"To be, or not to be, that is the question.\", 0}},
+    bpe[\"MergeRules\"], tokId, 64][[1, \"Input\"]]]\
+\>", "Input",ExpressionUUID->"a5f6cbfc-eecb-4b6d-9a85-a02ff479d86e"],
+
+Cell["\<\
+Caveat: with only 20 training examples and a tiny base model, the classifier \
+will overfit and barely generalise. The mechanics are exactly right; scale \
+the dataset to thousands of examples (and the model to 25M+ params) and the \
+same code path produces a working spam/sentiment/topic classifier. Raschka's \
+chapter 6 uses ~5K samples for the same target.\
+\>", "Text",ExpressionUUID->"10162401-afa4-4bf4-809a-6e5ffe8bfde2"],
+
+Cell["8.  Summary", "Section",ExpressionUUID->"82d6bb34-f575-4629-b5cd-0ccd7733f7cb"],
+
+Cell["\<\
+Part 6 covers the three main fine-tuning regimes that turn a pretrained \
+next-token model into something useful:\
+\>", "Text",ExpressionUUID->"2be529b8-ba83-4ba9-beff-61bcf17924ae"],
+
+Cell[TextData[{
+ "\[FilledSquare] ",
+ StyleBox["Full SFT for instruction following.",
+  FontWeight->Bold],
+ " Chat template, vocab extension, ",
+ StyleBox["expandModelVocabulary",
+  FontFamily->"Courier"],
+ " for grafting new rows onto the pretrained embedder and output ",
+ "projection.\n",
+ "\[FilledSquare] ",
+ StyleBox["LoRA for parameter-efficient SFT.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["loraDelta",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["loraWrap",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["applyLoraToLinear",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["trainLora",
+  FontFamily->"Courier"],
+ " \[LongDash] 20-50\[Times] fewer trainable parameters than full SFT, ",
+ "no degradation in result quality at the scales most users actually ",
+ "run.\n",
+ "\[FilledSquare] ",
+ StyleBox["Classification fine-tuning.",
+  FontWeight->Bold],
+ " Strip the LM head, pool the last-position hidden state, project ",
+ "to ",
+ Cell[BoxData[
+  SubscriptBox["n", "classes"]], "Text",
+  FontSize->14,ExpressionUUID->"8b38bafd-48dd-4fc4-ae87-dfb33547e52c"],
+ " logits. Same pretrained backbone; entirely different output ",
+ "objective. The Raschka chapter-6 setup."
+}], "Text",ExpressionUUID->"051ff1a5-5ea6-4278-b8ac-c9166c86dc9a"],
+
+Cell[TextData[{
+ "In ",
+ StyleBox["Part 7",
+  FontWeight->Bold],
+ " we go beyond imitation and apply ",
+ StyleBox["reinforcement learning",
+  FontSlant->Italic],
+ " on top of the SFT model: GRPO with a verifiable binary reward, ",
+ "no separate reward model, the recipe from nanochat."
+}], "Text",ExpressionUUID->"2975563a-1c73-4d31-a113-f4cd7eab6ea3"]
+},
+Saveable->True,
+WindowSize->{900, 750},
+FrontEndVersion->"14.3 for Mac OS X ARM (64-bit) (July 8, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"57db92a1-bf43-4ec7-bed1-821884b614c1"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[554, 20, 153, 2, 70, "Title",ExpressionUUID->"695c24c3-a4fb-4b3a-85c2-d47cae9d2582"],
+Cell[710, 24, 129, 0, 70, "Subtitle",ExpressionUUID->"1fe8f2ed-30f4-40e0-ba22-feebe83fd3b1"],
+Cell[842, 26, 626, 13, 70, "Text",ExpressionUUID->"693a7c5a-efe8-43a9-b8b0-0e560454ed45"],
+Cell[1471, 41, 110, 0, 70, "Section",ExpressionUUID->"87de9c7f-c89b-4268-a203-9d7f707e8724"],
+Cell[1584, 43, 105, 0, 70, "Input",ExpressionUUID->"0c52bdf6-b617-4e95-b20a-c51d170ba70e"],
+Cell[1692, 45, 330, 6, 70, "Input",ExpressionUUID->"963e8bab-735b-4692-85c9-f68b33abbc62"],
+Cell[2025, 53, 460, 13, 70, "Text",ExpressionUUID->"7de0251c-cb1e-465d-a396-384f7a34e094"],
+Cell[2488, 68, 370, 6, 70, "Input",ExpressionUUID->"248bbd97-74fd-4b35-ba76-8c81eb27343a"],
+Cell[2861, 76, 95, 0, 70, "Section",ExpressionUUID->"9b36f43b-3adf-48c5-bb5f-aca2257b1a87"],
+Cell[2959, 78, 195, 3, 70, "Text",ExpressionUUID->"622a5395-9d54-4997-9df1-d8db492f5400"],
+Cell[3157, 83, 178, 3, 70, "Input",ExpressionUUID->"53321c59-347f-4b2b-b545-715f6cbe76e1"],
+Cell[3338, 88, 269, 4, 70, "Input",ExpressionUUID->"65859d17-eedd-4e8a-aca9-97ceaae4bf3e"],
+Cell[3610, 94, 105, 0, 70, "Section",ExpressionUUID->"9e07d8d2-9d51-42e1-bade-64e97e898c70"],
+Cell[3718, 96, 305, 4, 70, "Text",ExpressionUUID->"3e1957c6-e4de-46ea-8f27-af2b7d63e161"],
+Cell[4026, 102, 117, 0, 70, "Input",ExpressionUUID->"c38b4be4-9b47-4fab-9a89-4904c05f3788"],
+Cell[4146, 104, 104, 0, 70, "Section",ExpressionUUID->"4686f59e-56ee-42d5-b592-82cee301baa8"],
+Cell[4253, 106, 275, 4, 70, "Text",ExpressionUUID->"33d40ece-7c89-492a-ba96-6ab98a8c37c5"],
+Cell[4531, 112, 239, 4, 70, "Input",ExpressionUUID->"84018241-6eee-440d-bcb3-df0d6c1f3533"],
+Cell[4773, 118, 210, 5, 70, "Input",ExpressionUUID->"c002849c-8ce2-485d-b0e2-5d8214f12a22"],
+Cell[4986, 125, 255, 4, 70, "Input",ExpressionUUID->"ba34f697-a941-4304-aec1-5cb27a1bda4c"],
+Cell[5244, 131, 97, 0, 70, "Section",ExpressionUUID->"ae5ead56-8bdf-42c1-92d9-1ab3923ae2ce"],
+Cell[5344, 133, 194, 3, 70, "Text",ExpressionUUID->"b88cd3d4-bc5a-4993-a40f-593524174f22"],
+Cell[5541, 138, 1031, 24, 70, "Input",ExpressionUUID->"369b702b-dcba-4ae7-b96b-f2d990a0a8bd"],
+Cell[6575, 164, 111, 0, 70, "Section",ExpressionUUID->"dac5fd5e-26e5-4011-9451-14a54d080204"],
+Cell[6689, 166, 1834, 47, 70, "Text",ExpressionUUID->"2b76f4c6-dbc7-4ee4-92d4-ee5b54cc2ffa"],
+Cell[8526, 215, 92, 0, 70, "Input",ExpressionUUID->"b7e7da3e-7a1a-49c0-91da-1a5885bbebb7"],
+Cell[8621, 217, 312, 5, 70, "Input",ExpressionUUID->"4ca7c23c-d1dd-4c54-8623-887e23c30f43"],
+Cell[8936, 224, 148, 2, 70, "Input",ExpressionUUID->"60668125-e520-4733-a931-6bdd74671a00"],
+Cell[9087, 228, 584, 11, 70, "Text",ExpressionUUID->"06da4d86-eddf-400a-ac2d-3a67e2c3c566"],
+Cell[9674, 241, 149, 2, 70, "Input",ExpressionUUID->"bf094817-bd33-4a9f-b718-fad8156a2d69"],
+Cell[9826, 245, 534, 13, 70, "Input",ExpressionUUID->"dc9ea766-d97b-48a1-9e54-deb000bd659b"],
+Cell[10363, 260, 124, 0, 70, "Section",ExpressionUUID->"e4c2690b-cdec-453a-94bd-17fece1b4820"],
+Cell[10490, 262, 676, 14, 70, "Text",ExpressionUUID->"08a801de-2b75-4fb3-b3f1-8ec8fd3dda3e"],
+Cell[11169, 278, 102, 0, 70, "Input",ExpressionUUID->"307c5546-ccb9-4df0-8a3d-4c1a5921ffc6"],
+Cell[11274, 280, 166, 4, 70, "Input",ExpressionUUID->"55eb5d57-a101-4837-a1f2-ca8585cf2fc1"],
+Cell[11443, 286, 285, 4, 70, "Text",ExpressionUUID->"9b6d388f-537c-403d-bc82-c67097f977e5"],
+Cell[11731, 292, 244, 5, 70, "Input",ExpressionUUID->"9763d913-b300-45b6-aba5-4a31b82bc3b6"],
+Cell[11978, 299, 277, 5, 70, "Input",ExpressionUUID->"522ba51a-0035-4bb8-9ad6-4a2f3b1676ee"],
+Cell[12258, 306, 304, 5, 70, "Input",ExpressionUUID->"a5f6cbfc-eecb-4b6d-9a85-a02ff479d86e"],
+Cell[12565, 313, 439, 6, 70, "Text",ExpressionUUID->"10162401-afa4-4bf4-809a-6e5ffe8bfde2"],
+Cell[13007, 321, 85, 0, 70, "Section",ExpressionUUID->"82d6bb34-f575-4629-b5cd-0ccd7733f7cb"],
+Cell[13095, 323, 192, 3, 70, "Text",ExpressionUUID->"2be529b8-ba83-4ba9-beff-61bcf17924ae"],
+Cell[13290, 328, 1232, 37, 70, "Text",ExpressionUUID->"051ff1a5-5ea6-4278-b8ac-c9166c86dc9a"],
+Cell[14525, 367, 352, 9, 70, "Text",ExpressionUUID->"2975563a-1c73-4d31-a113-f4cd7eab6ea3"]
+}
+]
+*)
+
+(* End of internal cache information *)

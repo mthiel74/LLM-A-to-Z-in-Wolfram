@@ -1,0 +1,248 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[     10772,        239]
+NotebookOptionsPosition[      8146,        200]
+NotebookOutlinePosition[      8503,        216]
+CellTagsIndexPosition[      8460,        213]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell["\<\
+Build a Large Language Model from Scratch \[LongDash] in Wolfram Language\
+\>", "Title",ExpressionUUID->"ec78c81e-8ccb-44e9-a3b2-78f8618dc957"],
+
+Cell["Part 8: An interactive chat widget", "Subtitle",ExpressionUUID->"5ec303f1-fde9-47df-acd1-710024d7075a"],
+
+Cell["\<\
+We close the series with the artefact every reader actually wants: a chat \
+interface, inside the notebook, talking to the model we built. An input \
+field, a transcript pane, a streaming generator. The model is the one Parts 1\
+\[Dash]7 produced. Drop the widget cell into a notebook, evaluate it, type, \
+get a reply.\
+\>", "Text",ExpressionUUID->"c3e1f905-9d0e-403b-ab20-3a9477a8446a"],
+
+Cell["1.  Setup", "Section",ExpressionUUID->"fab266a5-3dda-4e2e-b4b4-98f00495ca44"],
+
+Cell["SetDirectory[NotebookDirectory[]]", "Input",ExpressionUUID->"b1a565bc-3ad4-4f5d-a987-bb9392717abb"],
+
+Cell["\<\
+Get[\"../../part-01-tokeniser-and-embeddings/src/Tokeniser.wl\"]
+Get[\"../../part-02-self-attention/src/Attention.wl\"]
+Get[\"../../part-03-transformer-block/src/Transformer.wl\"]
+Get[\"../../part-04-pretraining/src/Training.wl\"]
+Get[\"../../part-05-sampling/src/Sampling.wl\"]
+Get[\"../../part-06-supervised-fine-tuning/src/SFT.wl\"]
+Get[\"src/Chat.wl\"]\
+\>", "Input",ExpressionUUID->"60a0d499-6616-41fd-adf2-758e049e0df0"],
+
+Cell["2.  Load the post-trained model", "Section",ExpressionUUID->"7dfcdbab-845e-47d0-8560-7a03855dfe67"],
+
+Cell["\<\
+For the demo we use the small pretrained checkpoint from Part 4 (in a real \
+run you'd load the GRPO-post-trained checkpoint from Part 7).\
+\>", "Text",ExpressionUUID->"ec27e805-b462-449f-8f87-e768613f347b"],
+
+Cell["\<\
+bpe = Import[\"../../part-01-tokeniser-and-embeddings/data/bpe_trained.mx\"];
+baseVocab = LLMAtoZ`Tokeniser`buildBPEVocabulary[bpe];
+chatVocab = LLMAtoZ`SFT`extendVocabulary[baseVocab];
+tokId  = AssociationThread[chatVocab -> Range[Length[chatVocab]]];
+idTok  = AssociationThread[Range[Length[chatVocab]] -> chatVocab];
+pretrained = Import[
+  \"../../part-04-pretraining/data/tiny_gpt_trained.wlnet\"];
+net = LLMAtoZ`SFT`expandModelVocabulary[pretrained, Length[chatVocab]];\
+\>", "Input",ExpressionUUID->"280ff932-c491-4f5e-94d0-5d4384d17133"],
+
+Cell["3.  The chat widget", "Section",ExpressionUUID->"cd8d5f17-30f2-4eab-a5be-7b2f0de0c113"],
+
+Cell[TextData[{
+ "Drop the cell below into the notebook and evaluate it. The widget ",
+ "is a ",
+ StyleBox["DynamicModule",
+  FontFamily->"Courier"],
+ " holding a running transcript, an input field, and Send / Reset ",
+ "buttons. Each Send triggers ",
+ StyleBox["chatTurn",
+  FontFamily->"Courier"],
+ ", which formats the existing transcript and the new user message ",
+ "in the SFT chat template, runs the model autoregressively until ",
+ "<|eot|> or the max-tokens limit, and appends the assistant turn."
+}], "Text",ExpressionUUID->"598c0da3-21e2-4add-b789-d1ff610453a4"],
+
+Cell["\<\
+LLMAtoZ`Chat`chatWidget[net, bpe[\"MergeRules\"], tokId, idTok,
+  \"MaxNew\" -> 60, \"Temperature\" -> 0.8, \"TopK\" -> 40]\
+\>", "Input",ExpressionUUID->"494dae4b-bd82-4f02-bd44-4c5c41043a8b"],
+
+Cell[TextData[{
+ "Caveat: this 1M-parameter model is laughably small. Even with the ",
+ "SFT step from Part 6 and the GRPO step from Part 7 stacked on top, ",
+ "it will not pass a Turing test \[LongDash] but it ",
+ StyleBox["will",
+  FontSlant->Italic],
+ " produce coherent Shakespeare-like exchanges, and every detail of ",
+ "the pipeline from BPE through GRPO is something you wrote (and ",
+ "could change). That is the point of the series."
+}], "Text",ExpressionUUID->"61c60d06-992a-429e-998b-cf6ebc467cc0"],
+
+Cell["4.  Streaming generation", "Section",ExpressionUUID->"b87064cc-e505-457c-baa6-5d2aaefa450e"],
+
+Cell[TextData[{
+ "For watching tokens land in real time, ",
+ StyleBox["streamChatTurn",
+  FontFamily->"Courier"],
+ " takes a callback that fires on every emitted token. The notebook ",
+ "front end can use this to update a Dynamic in place."
+}], "Text",ExpressionUUID->"4e379396-cc28-4ab1-a08f-21e560e3490a"],
+
+Cell["\<\
+DynamicModule[{streamed = \"\"},
+  Column[{
+    Style[\"Streaming demo\", Bold, 14],
+    Dynamic[Pane[streamed, {500, 100}, Scrollbars -> True]],
+    Button[\"start\",
+      streamed = \"\";
+      LLMAtoZ`Chat`streamChatTurn[net, {}, \"Hello\",
+        bpe[\"MergeRules\"], tokId, idTok,
+        Function[t, streamed = streamed <> t],
+        \"MaxNew\" -> 40, \"Temperature\" -> 0.7]
+    ]
+  }]
+]\
+\>", "Input",ExpressionUUID->"0e56f236-abe1-4923-9438-bfc50e110d1b"],
+
+Cell["5.  Deploying the chat as a web service", "Section",ExpressionUUID->"c7bed4db-5705-453a-8549-769112dc4186"],
+
+Cell[TextData[{
+ "The same chat function can be deployed to the Wolfram Cloud and ",
+ "given a permanent URL. With ",
+ StyleBox["CloudConnect",
+  FontFamily->"Courier"],
+ " set up:"
+}], "Text",ExpressionUUID->"128b84eb-7193-4b70-a388-884850fb79f4"],
+
+Cell["\<\
+(* CloudConnect[\"you@example.com\"];
+   CloudDeploy[
+     APIFunction[
+       {\"message\" -> \"String\"},
+       LLMAtoZ`Chat`chatTurn[net, {}, #message,
+         bpe[\"MergeRules\"], tokId, idTok][[-1, \"content\"]] &
+     ],
+     Permissions -> \"Public\"
+   ]
+*)\
+\>", "Input",ExpressionUUID->"7ea21242-cd55-490f-ab4f-f95c85edda14"],
+
+Cell["6.  Where we end", "Section",ExpressionUUID->"b336166a-4c9d-4690-b094-63a66e04752f"],
+
+Cell["\<\
+Across eight notebooks we built, from scratch in Wolfram Language:\
+\>", "Text",ExpressionUUID->"809c8510-beb7-44b9-83f2-e0baa7d20709"],
+
+Cell[TextData[{
+ "1. A byte-pair-encoding tokeniser + embedder.\n",
+ "2. Single-head and multi-head causal self-attention, with the ",
+ Cell[BoxData[
+  RowBox[{"1", "/", 
+   SqrtBox[
+    SubscriptBox["d", "k"]]}]], "Text",
+  FontSize->14,ExpressionUUID->"ceddb49e-06c5-4133-a34c-b66ebf9fb244"],
+ " factor derived rather than asserted.\n",
+ "3. The full pre-norm transformer block + a closed-form parameter ",
+ "count, with three reference model sizes.\n",
+ "4. Pre-training on Tiny Shakespeare, with the cloud path for ",
+ "scaling on a real corpus.\n",
+ "5. Five sampling strategies plus speculative decoding.\n",
+ "6. Supervised fine-tuning on instruction-following data.\n",
+ "7. GRPO reinforcement learning post-training on a verifiable task.\n",
+ "8. An interactive chat widget. This notebook."
+}], "Text",ExpressionUUID->"37ae71e2-80c8-4a4c-83b1-bbc48bcc9cc3"],
+
+Cell[TextData[{
+ "The final artefact, in front of you, is a small but ",
+ StyleBox["functional",
+  FontSlant->Italic],
+ " chat-style LLM where every component is something the reader can ",
+ "open, change, and re-evaluate. The model is not big enough to be ",
+ "useful as a product, but the pipeline is the same one production ",
+ "labs use; everything in nanochat or in the Llama or GPT-2 paper has ",
+ "a corresponding cell in this series."
+}], "Text",ExpressionUUID->"79bc3662-af09-40c6-bd46-492c101b1c2c"],
+
+Cell["\<\
+From here, the obvious next steps: scale (RemoteBatchSubmit on a larger \
+corpus), better tokeniser (byte-level BPE matching GPT-2 exactly), better \
+positional encoding (RoPE instead of learned absolute), multi-task SFT (mix \
+in code, math, dialogue), reasoning-style RL (GSM8K, longer \
+chains-of-thought). Every one of those is a single-package edit away.\
+\>", "Text",ExpressionUUID->"36f70221-62c2-4cfc-95bf-bcbbaf20d499"],
+
+Cell["References", "Section",ExpressionUUID->"ef55acf5-1594-4dfb-9df8-d8fce75ce9b5"],
+
+Cell["\<\
+Vaswani et al. (2017). Attention Is All You Need.
+Radford et al. (2019). GPT-2.
+Raschka, S. (2024). Build a Large Language Model from Scratch.
+Karpathy, A. (2025). nanochat.\
+\>", "Text",ExpressionUUID->"957e76f3-9c4c-4a3f-89bf-50b603a33f92"]
+},
+Saveable->True,
+WindowSize->{900, 750},
+FrontEndVersion->"14.3 for Mac OS X ARM (64-bit) (July 8, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"47aea3fc-656c-4c58-b1f3-d1f57524893d"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[554, 20, 153, 2, 70, "Title",ExpressionUUID->"ec78c81e-8ccb-44e9-a3b2-78f8618dc957"],
+Cell[710, 24, 109, 0, 70, "Subtitle",ExpressionUUID->"5ec303f1-fde9-47df-acd1-710024d7075a"],
+Cell[822, 26, 398, 6, 70, "Text",ExpressionUUID->"c3e1f905-9d0e-403b-ab20-3a9477a8446a"],
+Cell[1223, 34, 83, 0, 70, "Section",ExpressionUUID->"fab266a5-3dda-4e2e-b4b4-98f00495ca44"],
+Cell[1309, 36, 105, 0, 70, "Input",ExpressionUUID->"b1a565bc-3ad4-4f5d-a987-bb9392717abb"],
+Cell[1417, 38, 436, 8, 70, "Input",ExpressionUUID->"60a0d499-6616-41fd-adf2-758e049e0df0"],
+Cell[1856, 48, 105, 0, 70, "Section",ExpressionUUID->"7dfcdbab-845e-47d0-8560-7a03855dfe67"],
+Cell[1964, 50, 217, 3, 70, "Text",ExpressionUUID->"ec27e805-b462-449f-8f87-e768613f347b"],
+Cell[2184, 55, 554, 9, 70, "Input",ExpressionUUID->"280ff932-c491-4f5e-94d0-5d4384d17133"],
+Cell[2741, 66, 93, 0, 70, "Section",ExpressionUUID->"cd8d5f17-30f2-4eab-a5be-7b2f0de0c113"],
+Cell[2837, 68, 573, 12, 70, "Text",ExpressionUUID->"598c0da3-21e2-4add-b789-d1ff610453a4"],
+Cell[3413, 82, 203, 3, 70, "Input",ExpressionUUID->"494dae4b-bd82-4f02-bd44-4c5c41043a8b"],
+Cell[3619, 87, 510, 9, 70, "Text",ExpressionUUID->"61c60d06-992a-429e-998b-cf6ebc467cc0"],
+Cell[4132, 98, 98, 0, 70, "Section",ExpressionUUID->"b87064cc-e505-457c-baa6-5d2aaefa450e"],
+Cell[4233, 100, 307, 6, 70, "Text",ExpressionUUID->"4e379396-cc28-4ab1-a08f-21e560e3490a"],
+Cell[4543, 108, 477, 14, 70, "Input",ExpressionUUID->"0e56f236-abe1-4923-9438-bfc50e110d1b"],
+Cell[5023, 124, 113, 0, 70, "Section",ExpressionUUID->"c7bed4db-5705-453a-8549-769112dc4186"],
+Cell[5139, 126, 248, 6, 70, "Text",ExpressionUUID->"128b84eb-7193-4b70-a388-884850fb79f4"],
+Cell[5390, 134, 347, 11, 70, "Input",ExpressionUUID->"7ea21242-cd55-490f-ab4f-f95c85edda14"],
+Cell[5740, 147, 90, 0, 70, "Section",ExpressionUUID->"b336166a-4c9d-4690-b094-63a66e04752f"],
+Cell[5833, 149, 145, 2, 70, "Text",ExpressionUUID->"809c8510-beb7-44b9-83f2-e0baa7d20709"],
+Cell[5981, 153, 866, 17, 70, "Text",ExpressionUUID->"37ae71e2-80c8-4a4c-83b1-bbc48bcc9cc3"],
+Cell[6850, 172, 509, 9, 70, "Text",ExpressionUUID->"79bc3662-af09-40c6-bd46-492c101b1c2c"],
+Cell[7362, 183, 438, 6, 70, "Text",ExpressionUUID->"36f70221-62c2-4cfc-95bf-bcbbaf20d499"],
+Cell[7803, 191, 84, 0, 70, "Section",ExpressionUUID->"ef55acf5-1594-4dfb-9df8-d8fce75ce9b5"],
+Cell[7890, 193, 252, 5, 70, "Text",ExpressionUUID->"957e76f3-9c4c-4a3f-89bf-50b603a33f92"]
+}
+]
+*)
+
+(* End of internal cache information *)

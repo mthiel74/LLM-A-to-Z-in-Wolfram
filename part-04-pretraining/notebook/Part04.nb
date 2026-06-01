@@ -1,0 +1,1251 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[     42981,       1242]
+NotebookOptionsPosition[     32912,       1127]
+NotebookOutlinePosition[     33269,       1143]
+CellTagsIndexPosition[     33226,       1140]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell["\<\
+Build a Large Language Model from Scratch \[LongDash] in Wolfram Language\
+\>", "Title",ExpressionUUID->"3efb1a95-02ba-4fb6-a5eb-22a1f0a6a2fd"],
+
+Cell["Part 4: Pre-training a tiny model on Tiny Shakespeare", "Subtitle",ExpressionUUID->"b3cb4b3d-f0d7-4d7f-a25e-dc1e65adc144"],
+
+Cell[TextData[{
+ "After three parts of careful construction, Part 4 finally ",
+ StyleBox["trains",
+  FontSlant->Italic],
+ " the model.  No GPU, no cloud, no PyTorch \[Dash] a small ",
+ "(~1.8M parameter) char-level transformer that, after a few hours ",
+ "of CPU on a Mac mini, produces something that looks, locally and ",
+ "convincingly, like Shakespeare.  The only external dependency is ",
+ "the 1 MB Tiny Shakespeare text from Karpathy's char-rnn (2015)."
+}], "Text",ExpressionUUID->"c06065fc-75cc-42c4-a2b8-b3e3abf3ea96"],
+
+Cell[TextData[{
+ "The deliverable is the saved checkpoint at ",
+ StyleBox["data/charlevel_shakespeare_trained.wlnet",
+  FontFamily->"Courier"],
+ ", consumed by Parts 5\[Dash]8.  The headline figures are the ",
+ "loss curve (Section 7) and the gallery of generations evolving ",
+ "across training rounds (Section 6)."
+}], "Text",ExpressionUUID->"d66a73ee-a938-4613-876e-62c09b4d01e3"],
+
+Cell["1.  Setup and corpus", "Section",ExpressionUUID->"33e12e5b-7dc4-4a9a-9dc7-741ab96bb9c4"],
+
+Cell[TextData[{
+ "All paths in this notebook are relative to the notebook's own ",
+ "directory.  The ",
+ StyleBox["data/",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["src/",
+  FontFamily->"Courier"],
+ " and ",
+ StyleBox["figures/",
+  FontFamily->"Courier"],
+ " subdirectories are symlinks to the part's top-level folders, so ",
+ "evaluating from any front end \[OpenCurlyDoubleQuote]just works\
+\[CloseCurlyDoubleQuote] without setting the working directory by hand."
+}], "Text",ExpressionUUID->"a2b87189-11a4-415d-a4a8-74ce87261521"],
+
+Cell["SetDirectory[NotebookDirectory[]]", "Input",ExpressionUUID->"41c95af3-6745-4365-a23d-8548441fad01"],
+
+Cell["\<\
+Get[\"../../part-01-tokeniser-and-embeddings/src/Tokeniser.wl\"]
+Get[\"../../part-02-self-attention/src/Attention.wl\"]
+Get[\"../../part-03-transformer-block/src/Transformer.wl\"]
+Get[\"src/Training.wl\"]
+Get[\"src/CharTokeniser.wl\"]
+Get[\"../../Tiers.wl\"]\
+\>", "Input",ExpressionUUID->"c39d6f0a-77eb-45e9-9db6-8153df2f2242"],
+
+Cell["\<\
+text = Import[
+  \"../../part-01-tokeniser-and-embeddings/data/tinyshakespeare.txt\",
+  \"Text\"];
+StringLength[text]\
+\>", "Input",ExpressionUUID->"1b7672ba-7991-4c73-935f-ebc7a09c3ac0"],
+
+Cell["2.  Choice: BPE vs character-level", "Section",ExpressionUUID->"b6d2f31f-4c88-43a8-97b3-74a642808ac3"],
+
+Cell["\<\
+Part 1 built a ~4000-token BPE tokeniser.  That is the right choice for a \
+model with a parameter budget in the tens or hundreds of millions; it is the \
+wrong choice for a 1\[Dash]5 M-parameter model trained on a 1 MB corpus, \
+because for a tiny model the embedding tables alone eat most of the parameter \
+budget.\
+\>", "Text",ExpressionUUID->"ba008ba6-5025-47ec-9c60-701a3b0ed486"],
+
+Cell["\<\
+A character-level vocabulary (65 symbols, including punctuation and a \
+newline) shrinks the embedding tables by ~60\[Times].  The trade-off is \
+longer sequences \[LongDash] every character becomes its own token \
+\[LongDash] but at this scale the per-parameter modelling capacity is what \
+matters.  This is exactly the choice Karpathy made in char-rnn (2015) at LSTM \
+~1M parameters on the same corpus.\
+\>", "Text",ExpressionUUID->"f5aa67af-84ab-4612-a785-fa70ebc294c6"],
+
+Cell["\<\
+vocab = LLMAtoZ`CharTokeniser`charVocabulary[text];
+tokId = LLMAtoZ`CharTokeniser`charTokenToIdAssociation[vocab];
+idTok = LLMAtoZ`CharTokeniser`charIdToTokenAssociation[vocab];
+Length[vocab]\
+\>", "Input",ExpressionUUID->"9f456765-100a-4105-b868-622f0f27348e"],
+
+Cell["3.  Tiers: one dial controls everything", "Section",ExpressionUUID->"1930bec6-2436-41df-bfce-5f2ad92a93c8"],
+
+Cell[TextData[{
+ "Every long-running notebook in this series begins with one line: ",
+ StyleBox["tier = \"smallCPU\"",
+  FontFamily->"Courier"],
+ ".  ",
+ "Five tiers are defined in ",
+ StyleBox["Tiers.wl",
+  FontFamily->"Courier"],
+ "."
+}], "Text",ExpressionUUID->"8add0375-a919-45a3-90dd-eda53fdefcce"],
+
+Cell["\<\
+Grid[
+  Prepend[
+    Table[Module[{t = LLMAtoZ`Tiers`tier[n]},
+      {n, t[\"modelSpec\"][\"label\"], t[\"dataset\"],
+       \"~\[CapitalAHat]\[Sterling]\" <> ToString[t[\"estCostGBP\"]],
+       \"~\" <> ToString[t[\"estTimeMinutes\"]] <> \" min\"}],
+      {n, LLMAtoZ`Tiers`availableTiers[]}],
+    Style[#, Bold] & /@ {\"tier\", \"model\", \"dataset\", \"approx cost\", \
+\"approx time\"}],
+  Frame -> All, Background -> {None, {LightGray, None}},
+  Alignment -> Center]\
+\>", "Input",ExpressionUUID->"dfd20ce0-4a93-4fb5-a693-8f460ecb1258"],
+
+Cell[TextData[{
+ "This post uses the char-level variant.  The cloud-tier code path ",
+ "is identical (",
+ StyleBox["submitRemotePretraining[...]",
+  FontFamily->"Courier"],
+ ") for readers with a Wolfram Cloud subscription."
+}], "Text",ExpressionUUID->"c677feb7-2c36-4dff-baa2-3f21e094b376"],
+
+Cell["4.  A bug we didn't see, until char-level made us", "Section",ExpressionUUID->"9949697a-0684-4acd-b644-fff99edd3cc2"],
+
+Cell["\<\
+This section earns its place because it captures a class of silent error that \
+the series has the right tooling to surface.  The natural way to define \
+cross-entropy loss in WL is\
+\>", "Text",ExpressionUUID->"817676d8-7ff1-4317-aef6-a8fbc8656228"],
+
+Cell["\<\
+(* DON'T do this with raw logits *)
+(*  NetTrain[..., LossFunction -> CrossEntropyLossLayer[\"Index\"]]  *)\
+\>", "Input",ExpressionUUID->"74192204-9a60-4088-b71d-6c5c4216c53f"],
+
+Cell[TextData[{
+ StyleBox["CrossEntropyLossLayer[\"Index\"]",
+  FontFamily->"Courier"],
+ " expects ",
+ StyleBox["probabilities",
+  FontSlant->Italic],
+ " as input and computes ",
+ Cell[BoxData[
+  RowBox[{
+   RowBox[{"-", "log"}], 
+   RowBox[{"(", 
+    RowBox[{"p", "[", "target", "]"}], ")"}]}]], "Text",
+  FontSize->14,ExpressionUUID->"d459e589-deb9-4516-9f08-5d53f4de049b"],
+ ", which is non-negative.  Our ",
+ StyleBox["gptModel",
+  FontFamily->"Courier"],
+ " ends with a ",
+ StyleBox["LinearLayer[vocabSize]",
+  FontFamily->"Courier"],
+ " that emits raw logits, not probabilities.  Feeding logits straight ",
+ "into the loss layer produces a number that is not cross-entropy."
+}], "Text",ExpressionUUID->"2aaf973d-b10b-4794-9587-116a2f31cbba"],
+
+Cell[TextData[{
+ "For BPE vocab ~4000 this happened to be okay: the optimiser ",
+ "couldn't drive a single logit unbounded without similarly moving ",
+ "all the others through the shared linear projection, and the ",
+ "training landed in regimes that produced sensible token ",
+ "distributions.  For a 65-character vocabulary, no such constraint ",
+ "applies: the first overnight char-level run, after 6.5 hours, ",
+ "produced a model whose maximum logit was ",
+ StyleBox["9,415",
+  FontWeight->Bold],
+ " and whose generations were the single character ",
+ StyleBox["'s'",
+  FontFamily->"Courier"],
+ " repeated to fill the buffer.  The loss curve descended monotonically ",
+ "past zero into ",
+ Cell[BoxData[
+  RowBox[{"-", "10"}]], "Text",
+  FontSize->14,ExpressionUUID->"aa6909d8-8b5d-4e12-a86b-5765ef4fae6c"],
+ "."
+}], "Text",ExpressionUUID->"f4a9085a-f884-4a3c-b838-91ea6ad1b860"],
+
+Cell[BoxData[
+ RowBox[{"Import", "[", "\"\<figures/charlevel_loss_curve_BROKEN.png\>\"", 
+  "]"}]], "Input",ExpressionUUID->"d2cb8e88-b1d8-4f9c-94a0-0ec9fd19a5c8"],
+
+Cell[TextData[{
+ "A cross-entropy loss curve that descends ",
+ StyleBox["below zero",
+  FontSlant->Italic],
+ " is the signature you should learn to recognise.  Cross-entropy ",
+ "is bounded below by zero.  A loss going negative is not \
+\[OpenCurlyDoubleQuote]training going great\[CloseCurlyDoubleQuote]; ",
+ "it is \[OpenCurlyDoubleQuote]you are not optimising what you think ",
+ "you are.\[CloseCurlyDoubleQuote]"
+}], "Text",ExpressionUUID->"45ed29b4-97eb-4a30-a491-20b7f756eb07"],
+
+Cell[TextData[{
+ "The fix is one line: wrap the model in ",
+ StyleBox["NetMapOperator[SoftmaxLayer[]]",
+  FontFamily->"Courier"],
+ " before training so the loss layer sees probabilities; strip the ",
+ "softmax after training so the saved checkpoint still emits logits ",
+ "(cleaner for temperature sampling in Part 5).  ",
+ StyleBox["trainGptModel",
+  FontFamily->"Courier"],
+ " in the package now does this automatically."
+}], "Text",ExpressionUUID->"d88c708c-41b8-45f0-b241-6982d5dbf8d7"],
+
+Cell["5.  Cosine schedule, checkpointing, Wolfram-version gotchas", "Section",ExpressionUUID->"3132c676-b00a-4297-a5e6-022dc6b26bb6"],
+
+Cell["5.1  Cosine schedule with linear warmup", "Subsection",ExpressionUUID->"6a558def-6192-4c1b-9034-cc70e8f55043"],
+
+Cell["\<\
+The first ~10% of training linearly ramps the learning rate up to its peak; \
+the remaining 90% cosine-decays to 10% of peak.  Helps with first-batch \
+instability and late-training noise.\
+\>", "Text",ExpressionUUID->"c47d4502-3cc8-4bf7-8619-2b738bea80f4"],
+
+Cell["\<\
+Plot[LLMAtoZ`Training`cosineSchedule[r, 100, 0.001, 0.1],
+  {r, 0, 100},
+  Frame -> True,
+  FrameLabel -> {\"round (% of total)\", \"learning rate\"},
+  PlotLabel -> \"Linear warmup (10%) + cosine decay\",
+  PlotStyle -> Directive[ColorData[97][2], Thick],
+  ImageSize -> 480]\
+\>", "Input",ExpressionUUID->"8dddd601-7e82-4279-8ca0-c9861d0f83f7"],
+
+Cell["5.2  Periodic checkpointing", "Subsection",ExpressionUUID->"3cea46d8-27a1-4088-b9e9-ffdd6292179f"],
+
+Cell[TextData[{
+ "Long training runs die.  ",
+ StyleBox["NetTrain",
+  FontFamily->"Courier"],
+ "'s ",
+ StyleBox["TrainingProgressFunction",
+  FontFamily->"Courier"],
+ " writes the current model to disk every 5 minutes.  Saved ",
+ "in our case the run we'd otherwise have lost when the 15.0 ",
+ "prerelease kernel disconnected mid-run from its license server."
+}], "Text",ExpressionUUID->"50fbc4f7-ed51-4d83-8a53-29e5346f5485"],
+
+Cell["5.3  Wolfram version matters for long runs", "Subsection",ExpressionUUID->"c100a78a-5e4c-4073-8269-28944784c210"],
+
+Cell[TextData[{
+ "Sustained ",
+ StyleBox["NetTrain",
+  FontFamily->"Courier"],
+ " calls on the 15.0-prerelease wolframscript binary repeatedly ",
+ "died mid-run with ",
+ StyleBox["\"The product exited because of a license error.\"",
+  FontSlant->Italic],
+ "  Switching to the stable 14.3 binary fixed it.  If you are on a ",
+ "prerelease version of WL, training jobs that need to run for hours ",
+ "deserve a quick sanity check on a stable version first."
+}], "Text",ExpressionUUID->"ff5d0b87-a8fb-48ed-aa19-87ceeab09234"],
+
+Cell["6.  Watching the model dream up Shakespeare", "Section",ExpressionUUID->"80da092f-f32c-416e-861c-2a80531eb840"],
+
+Cell[TextData[{
+ "A second background process snapshot model generations at every ",
+ "round during training.  Below, every round of training is shown ",
+ "with its loss, its perplexity, the wall time at which it landed, ",
+ "and a 200-character generation continuing from both ",
+ StyleBox["ROMEO:",
+  FontFamily->"Courier"],
+ " and ",
+ StyleBox["HAMLET:",
+  FontFamily->"Courier"],
+ " at temperature 0.8.  Watch the output evolve from noise to ",
+ "Shakespeare-flavoured prose."
+}], "Text",ExpressionUUID->"94d28c16-163d-4dc7-8723-af3588a88bf3"],
+
+Cell[TextData[{
+ StyleBox["Round 7",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "1.270",
+ "  \[Bullet]  perplexity = ",
+ "3.56",
+ "  \[Bullet]  wall = ",
+ "60.2",
+ " min"
+}], "Subsubsection",ExpressionUUID->"a806f4f1-2978-4e0e-b131-12cb3a22f93c"],
+
+Cell["\<\
+ROMEO:
+You shall attard you: but she advise you, pretty,
+And be as immediation'd and art that said
+At the greater, thou hast privateless sons,
+Thy son, the king with the singlition,
+Whose cruels shop her pa\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"3ccb4737-fc72-4527-a146-3979a3740771"],
+
+Cell["\<\
+HAMLET:
+He knows will stay, we stars his foot
+And heart a visage.
+
+LEONTES:
+Come;
+I have not read with his soul.
+
+PAULINA:
+Good flesh are dead.
+
+PETRUCHIO:
+Ah, beliver, some stread my noble loar.
+
+KATHARINA:
+\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"5808e1e4-6fb2-4a0b-bdeb-bb42ac44199a"],
+
+Cell[TextData[{
+ StyleBox["Round 8",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "1.236",
+ "  \[Bullet]  perplexity = ",
+ "3.44",
+ "  \[Bullet]  wall = ",
+ "65.2",
+ " min"
+}], "Subsubsection",ExpressionUUID->"54f40ae2-07b8-4ab3-a2ca-15314df047ef"],
+
+Cell["\<\
+ROMEO:
+The love horry that shall pluck these consums!
+And let me length the cursting the crown.
+
+LUCENTIO:
+I will not cheerful; and the senators and not the
+sea to the daughter of this fortune to make thee,\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"e83ea6fa-4072-4822-adc7-3741bbb1805b"],
+
+Cell["\<\
+HAMLET:
+Good boy, you gave me, sir! and But what, you shall be
+fellow not able?
+
+ANGELO:
+Good Good Montague as the thy deeds of
+From chaptise I thy live:
+
+ISABELLA:
+Good trumpeth!
+
+FLORIZEL:
+I know how thou, \
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"49b7b8e6-07ab-426b-8b44-4b72edd2ae0d"],
+
+Cell[TextData[{
+ StyleBox["Round 9",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "1.204",
+ "  \[Bullet]  perplexity = ",
+ "3.33",
+ "  \[Bullet]  wall = ",
+ "75.2",
+ " min"
+}], "Subsubsection",ExpressionUUID->"cf20793d-815d-4450-8908-39532bbf2601"],
+
+Cell["\<\
+ROMEO:
+What sayest thou confess'?  his Capulet with a
+fellower, will let me conference darkly to make
+the action wearing out of with ruded.
+
+BUCKINGHAM:
+I'll go to be that my will dust receiving e'er.
+
+QUEE\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"4120b426-0eb1-4398-bfa9-e6a4094655db"],
+
+Cell["\<\
+HAMLET:
+Then, my lord, Camillo's will be, my lord.
+
+KING RICHARD III:
+
+QUEEN ELIZABETH:
+Make metter, he's work: as I told the true that.
+
+KING RICHARD III:
+Perdonous so dark to this is thought and coward
+Made\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"426ff6f0-4f11-4b0e-b163-6874323472de"],
+
+Cell[TextData[{
+ StyleBox["Round 10",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "1.173",
+ "  \[Bullet]  perplexity = ",
+ "3.23",
+ "  \[Bullet]  wall = ",
+ "85.2",
+ " min"
+}], "Subsubsection",ExpressionUUID->"04a586c1-9a78-48b9-a87e-94fced08b56e"],
+
+Cell["\<\
+ROMEO:
+A gultinens.
+
+Third Servingman:
+I have a butcher! for my heaven boy, this came of me.
+
+CORIOLANUS:
+What, in so deep that die to have been drawn
+I discoursed to his lawful worthy heaming!
+
+CORIOLANUS:\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"4deb4f7c-c178-4605-b3fc-81aa7e2cc412"],
+
+Cell["\<\
+HAMLET:
+Do never say. a pleasant dearly to Caesar
+Dece Edward, and he stay.
+
+TRANIO:
+A virtuous heart away.
+
+ISABELLA:
+What we defend repent his subject,
+That is father was dested, asking as the like
+Defiance\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"e0920fae-038b-46d9-8ba4-fc4e409521d8"],
+
+Cell[TextData[{
+ StyleBox["Round 11",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "1.143",
+ "  \[Bullet]  perplexity = ",
+ "3.14",
+ "  \[Bullet]  wall = ",
+ "95.2",
+ " min"
+}], "Subsubsection",ExpressionUUID->"584a8b89-5168-4b61-bba9-dd594edd2a6b"],
+
+Cell["\<\
+ROMEO:
+As they are conspire of feebers; and senators
+That he is him passing the lick of his death.
+
+BUCKINGHAM:
+A pair of access King of divisided,
+But that the carous worth hand counted the sumber'd,
+That \
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"210b5775-260d-4cf8-ac10-6e88338cdf69"],
+
+Cell["\<\
+HAMLET:
+The same, I'll find the severily frame of itself.
+
+LUCIO:
+What are you must perform'd once! I must cannot,
+That stays of two sevent command, and great the
+princes for this.
+
+LUCIO:
+Come, bitter me wit\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"4234d566-d923-4446-bf06-7772f25d8485"],
+
+Cell[TextData[{
+ StyleBox["Round 12",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "1.113",
+ "  \[Bullet]  perplexity = ",
+ "3.04",
+ "  \[Bullet]  wall = ",
+ "105.2",
+ " min"
+}], "Subsubsection",ExpressionUUID->"611a6085-0060-4072-8e6c-57ee82b992f1"],
+
+Cell["\<\
+ROMEO:
+Why, be more than we will come your sworn father to
+fast and speak fast, an in either with you hard
+Both thee by this ape to himself, to
+carry to the king, and I am afraid
+on the lost handled with th\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"db944c2c-b84a-4aea-a469-261276b83e09"],
+
+Cell["\<\
+HAMLET:
+My royal early were sometiitors?
+
+LADY CAPULET:
+Boatswain, it bereflesh thee!
+Why, so it is mocked that thou with devoted and
+Who recovered for Rome, are patient on
+Wash'd wither's netther's hand and \
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"37a7dffd-ee9b-4a54-bb32-390cb88c0ca2"],
+
+Cell[TextData[{
+ StyleBox["Round 13",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "1.082",
+ "  \[Bullet]  perplexity = ",
+ "2.95",
+ "  \[Bullet]  wall = ",
+ "120.3",
+ " min"
+}], "Subsubsection",ExpressionUUID->"8c88cc22-510d-403b-b341-4f5c8eb734c8"],
+
+Cell["\<\
+ROMEO:
+Ay, you seem'st thou, are you confeat,
+If this foul a traitor: you are any other.
+
+PETRUCHIO:
+Belike as your brother out the people, most worthy tongue
+The Volve margest, she as ask'd with a loving
+b\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"9560f071-c5e4-462d-9236-8458d873263e"],
+
+Cell["\<\
+HAMLET:
+His prancies shall not be that smort proceedings
+Than there do the right want Lucentio's daughter
+To send a little sort, and I'll see, and approadoes
+Dine against the troublous arise my dear,
+As you s\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"2ce7771d-a090-4394-916d-78391acd7fef"],
+
+Cell[TextData[{
+ StyleBox["Round 14",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "1.051",
+ "  \[Bullet]  perplexity = ",
+ "2.86",
+ "  \[Bullet]  wall = ",
+ "135.4",
+ " min"
+}], "Subsubsection",ExpressionUUID->"b6140f38-a1d9-4d56-abb1-ddc12af5801c"],
+
+Cell["\<\
+ROMEO:
+It is a man world of king.
+
+LADY CAPULET:
+O, no, no, no; I thank she fare a free flat,
+And thou think'st think not shall throw the day.
+
+Nurse:
+I pray you, my lord,
+Rouse is a grave't.
+
+LUCIO:
+O, whe\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"e3df7c0f-1c83-434a-925c-d4a7eed73190"],
+
+Cell["\<\
+HAMLET:
+The city is of his country, and let it see
+For my brother fresh made in me thy land,
+They say ame I do pray in any thing
+At this offined hath resolved for this offence?
+
+CLIFFORD:
+Betwixtch, I thee th\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"0f1a5409-d678-4a00-b4e3-1894b807437c"],
+
+Cell[TextData[{
+ StyleBox["Round 15",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "1.020",
+ "  \[Bullet]  perplexity = ",
+ "2.77",
+ "  \[Bullet]  wall = ",
+ "150.6",
+ " min"
+}], "Subsubsection",ExpressionUUID->"854263c8-7ff9-4560-9bb4-1aa840badb9a"],
+
+Cell["\<\
+ROMEO:
+Faith, for all the time will plant that have alone,
+And if I will be long. I write the king,
+And of this vipe peace to hunts to melanches?
+No, but stay with the deep of thy hopes little stand,
+Too pa\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"eacc599e-b7d3-4ade-8599-e3d5ceb49382"],
+
+Cell["\<\
+HAMLET:
+What wouldst dischance the match, and therefore to the
+That he shall not come home to him up the wax!
+Heavens not upon ye the best soldiers of my sweet.
+
+WARWICK:
+A perhaid bark saint, sovereign, to m\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"90cc88a8-262b-4050-b6a1-90e10f828410"],
+
+Cell[TextData[{
+ StyleBox["Round 16",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "0.989",
+ "  \[Bullet]  perplexity = ",
+ "2.69",
+ "  \[Bullet]  wall = ",
+ "196.9",
+ " min"
+}], "Subsubsection",ExpressionUUID->"10af605d-7eb6-4a3f-84f1-560e1e06320a"],
+
+Cell["\<\
+ROMEO:
+You are gone; yes, if my cheer, throne in my lord,
+That will deliver his son sound,
+As if he were dead, and in his great please.
+The books his sister of his chity be here.
+
+BALTHASABERCY:
+My lords, I\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"bfeaf4d1-37f2-45af-a53f-1476aced48dd"],
+
+Cell["\<\
+HAMLET:
+Welcome, my lord; for I do much awake,
+Because thou art a prince. This was but off
+To threw mine and mine ears wandering, neither a
+man: now my brother, my lord, and honour and so good,
+Lucentio then \
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"fd408e4d-be9e-43fa-9c7e-89c6d6a38c29"],
+
+Cell[TextData[{
+ StyleBox["Round 17",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "0.959",
+ "  \[Bullet]  perplexity = ",
+ "2.61",
+ "  \[Bullet]  wall = ",
+ "217.3",
+ " min"
+}], "Subsubsection",ExpressionUUID->"b74ca8aa-8fb3-4e41-9b7c-be7fb0a39761"],
+
+Cell["\<\
+ROMEO:
+See, thou hast many little a most prece dotacget?
+
+First Citizen:
+Give me my life, better:
+The kingly she lived thanks, I am sworn.
+
+CORIOLANUS:
+To the commons much, good lord, we must prove us,
+Whos\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"3e0fb2e0-2981-44bc-b335-f660ac2d16bf"],
+
+Cell["\<\
+HAMLET:
+HopeR GHIOUCENSIO:
+Here stands here we march amend to London,
+Like a royal person to the rest of his death!
+Too little on may so desire, for I have,
+That dogning, to conspirat with viting comes.
+
+EDWA\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"1013e501-6635-45ce-91a2-0d10d2c41d86"],
+
+Cell[TextData[{
+ StyleBox["Round 18",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "0.929",
+ "  \[Bullet]  perplexity = ",
+ "2.53",
+ "  \[Bullet]  wall = ",
+ "227.3",
+ " min"
+}], "Subsubsection",ExpressionUUID->"8ae9ab39-147f-4fe5-9d80-1f02c3b6ff7c"],
+
+Cell["\<\
+ROMEO:
+And then, I'll make my beauty in the people world;
+I come to his safety of festive and strives,
+And hung twing in his such afsent as power:
+For he is banish'd, inspishing ears:
+Thy son as favour befo\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"3f7f2dc5-5840-4d6e-b187-e4e82b29dac4"],
+
+Cell["\<\
+HAMLET:
+I do; and, in good time, and some little pleading
+More than their writing when they said on their seas:
+And in their devils, the signal prince.
+
+TRANIO:
+Is it not stranger a king not,
+Betide their tru\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"941bbf6d-3382-416f-be7f-bb91df6c39d4"],
+
+Cell[TextData[{
+ StyleBox["Round 19",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "0.900",
+ "  \[Bullet]  perplexity = ",
+ "2.46",
+ "  \[Bullet]  wall = ",
+ "248.2",
+ " min"
+}], "Subsubsection",ExpressionUUID->"ed290c2c-8746-4063-9cfa-e2c830665fda"],
+
+Cell["\<\
+ROMEO:
+Sir, I wish, you have stay'd to your mother,
+To be a marriage, which you can, you shall stand from him,
+But he's runs my mad noble leave
+The throne eye of the king; eldo I; there are from
+they enfold\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"5e4e8b34-7bbc-400e-b4e9-795366c83568"],
+
+Cell["\<\
+HAMLET:
+My master make thee from this left lance and dost;
+The day saw herself known tway till strew by the stranger.
+
+HASTINGS:
+Ay, and let's some pity.
+
+LORD ROSS:
+There in our thine bastard comes in the ai\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"d19a1b7b-cdea-44d9-a88c-da5029765953"],
+
+Cell[TextData[{
+ StyleBox["Round 20",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "0.872",
+ "  \[Bullet]  perplexity = ",
+ "2.39",
+ "  \[Bullet]  wall = ",
+ "263.2",
+ " min"
+}], "Subsubsection",ExpressionUUID->"60b6c1d8-51b8-4efc-b6b5-c9736106d23f"],
+
+Cell["\<\
+ROMEO:
+And you, belike not moved.
+
+WARWICK:
+And live Margaret:
+And so deep and doth approve him of my back:
+The other jest, hath side the self
+Thou know'st me work and apply'd drave by think!
+
+DUCHESS OF YO\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"4c078d78-087a-446a-9b06-cc658216a608"],
+
+Cell["\<\
+HAMLET:
+Nurse! say she is my head wife, I say.
+
+AUTOLYCUS:
+I am affair'd
+Of my sons with a tale: if you come to death
+He drived upon his life, made presence
+of what would battle expering dive my head,
+The gre\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"abe68692-244e-40b5-b0e2-45f75a56221f"],
+
+Cell[TextData[{
+ StyleBox["Round 21",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "0.844",
+ "  \[Bullet]  perplexity = ",
+ "2.33",
+ "  \[Bullet]  wall = ",
+ "278.2",
+ " min"
+}], "Subsubsection",ExpressionUUID->"a2130654-17d7-488b-9921-7dee6e86bef6"],
+
+Cell["\<\
+ROMEO:
+Who said ever so any to getter, boy,
+With that's exile, here and straight
+Shall keep your conference, you will, my son is chance;
+Or I will not, wife is a happy more,
+But what then braments than has \
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"e2109c31-1f1d-4c52-aeae-439cad4f96c3"],
+
+Cell["\<\
+HAMLET:
+This is the duke is a prophecial chope
+Thither trick than threatening, wherein, by mine honest,
+Holloa, though be it, though it be no straight.
+
+HENRY BOLINGBROKE:
+My letters guard than a gentleman.
+
+\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"13a94b66-fa97-41ec-a2bc-add306741bf7"],
+
+Cell[TextData[{
+ StyleBox["Round 22",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "0.816",
+ "  \[Bullet]  perplexity = ",
+ "2.26",
+ "  \[Bullet]  wall = ",
+ "283.3",
+ " min"
+}], "Subsubsection",ExpressionUUID->"63e22302-0005-44b2-b095-5016e1b9c900"],
+
+Cell["\<\
+ROMEO:
+By this is thy heavy father's watch:
+Not when he hath brought upon the duke o' the good:
+But for a horse and woe this rack's rod,
+Shall continut no more, but but my word but rear.
+
+CLEOMENEENEENIUS:
+\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"3d6475bc-7d7a-4706-a46f-2ca9386b427b"],
+
+Cell["\<\
+HAMLET:
+All swell all this fool, though thy words,
+When souls, thy brother, thy foot-owers
+Would be here and some other name of chaste:
+For a shrew word to thy labour, whoso noble
+A simple offer well take the\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"a1dcc623-c223-4630-90d9-57320c140573"],
+
+Cell[TextData[{
+ StyleBox["Round 23",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "0.791",
+ "  \[Bullet]  perplexity = ",
+ "2.21",
+ "  \[Bullet]  wall = ",
+ "293.3",
+ " min"
+}], "Subsubsection",ExpressionUUID->"099116b5-0165-49c3-9453-a3057c23e418"],
+
+Cell["\<\
+ROMEO:
+My Lord of Norforford, and you say your gentle,
+I am a king, our general lords
+To see your grace, with me how, beauty scandalous aid,
+And now in his purse bridging damn'd light.
+
+QUEEN ELIZABETH:
+No,\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"b410102b-6452-4687-8f25-a843816f09fc"],
+
+Cell["\<\
+HAMLET:
+This is a world, if you build so;
+I see thou cut off is thy swords with cousin,
+That they have laid in rescuite themself:
+'Twere in Vienna to the church shapes, to the day
+Of burst by flying eldom the\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"16bff358-b486-42b4-b06e-bc27813bcc4e"],
+
+Cell[TextData[{
+ StyleBox["Round 24",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "0.767",
+ "  \[Bullet]  perplexity = ",
+ "2.15",
+ "  \[Bullet]  wall = ",
+ "312.1",
+ " min"
+}], "Subsubsection",ExpressionUUID->"f07c6962-8aea-4b93-9102-2ba19123544c"],
+
+Cell["\<\
+ROMEO:
+By him, I am content; let me but must I
+Should not lie with thee: dispute his knaves, and good night,
+As thuskeep's proportions stand ne'er from me
+He will have the merce of our kin, what out
+Rething\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"0a262355-858c-4de1-a855-1a12e98e4ed7"],
+
+Cell["\<\
+HAMLET:
+From whence shall will make us close,--
+
+Nurse:
+Ah, lea, sir, in a bawdy; cawnsainting talk,
+Of this palme of deliver'd furest,
+And Romeo is banished enter from many years
+A vessity her eyes with none\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"6045a322-5a8c-44bc-ab38-3dfd48d719ba"],
+
+Cell[TextData[{
+ StyleBox["Round 25",
+  FontSize->14,
+  FontWeight->Bold],
+ "  \[Bullet]  loss = ",
+ "0.742",
+ "  \[Bullet]  perplexity = ",
+ "2.10",
+ "  \[Bullet]  wall = ",
+ "327.1",
+ " min"
+}], "Subsubsection",ExpressionUUID->"3ed464d0-5685-4642-96b5-cd5976b5e7af"],
+
+Cell["\<\
+ROMEO:
+In royal point but both off all my head!
+O, whethere is my wedged friends, and my art
+Too good unless and men, I'll not be the law that fast
+Should buy advised us with bloody, which look
+To tell it h\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"716d93a2-e122-4233-9df3-5b112d4e2a7b"],
+
+Cell["\<\
+HAMLET:
+Yes, my good lord: I would tell you the devil
+Where I like in placense her exceptress'd,
+The king hath forced him as he waves his oath
+For which here becomed by him here his lord:
+I have heard to acqu\
+\>", "Program",
+ FontFamily->"Courier",
+ FontSize->11,ExpressionUUID->"82d0814f-a870-4b68-95b4-f253717d81c8"],
+
+Cell["7.  Loss curve and final result", "Section",ExpressionUUID->"46a42a3a-584c-492a-8296-d803dfa2d517"],
+
+Cell["Import[\"figures/charlevel_loss_curve.png\"]", "Input",ExpressionUUID->"1f576738-702f-488c-a3f3-4faeabd63ec0"],
+
+Cell["\<\
+The curve has the same shape Karpathy's char-rnn produced in 2015 at \
+comparable scale: a fast initial drop in the first round (the model learns \
+the character-frequency distribution), a slower elbow as it discovers word \
+boundaries, and a long shallow tail where it refines local syntax.\
+\>", "Text",ExpressionUUID->"7a38806e-ae3d-45d9-8aa2-12c61b3e7480"],
+
+Cell["\<\
+We trained for 5.5 hours, completed 23 rounds, hit a final round loss of \
+~0.74 (train perplexity ~2.1).  Held-out eval loss came out to 2.59 (eval \
+perplexity 13.4), giving a train/eval gap of 3.49 \[LongDash] a clear overfit \
+signature.  At this scale, with 1.8M parameters memorising a 1.08M-character \
+corpus, the asymptote of the train loss is well below the asymptote of the \
+eval loss; further training would push train down without making the model \
+actually generalise better.  The checkpoint we ship is the one at the end of \
+this run.\
+\>", "Text",ExpressionUUID->"d5e0df07-6353-4574-ba8d-8c1d6d7322fa"],
+
+Cell["\<\
+Import[\"data/charlevel_eval_summary.json\"][[
+    {\"trainLoss\", \"trainPerplexity\", \"evalLoss\", \"evalPerplexity\",
+     \"generalisationGap\", \"verdict\"}]]\
+\>", "Input",ExpressionUUID->"39a3f006-a560-4dbf-9496-ebf989b926e5"],
+
+Cell["8.  Summary", "Section",ExpressionUUID->"037c0f76-8c47-44c7-8021-09199c1ad49a"],
+
+Cell[TextData[{
+ "\[FilledSquare] ",
+ StyleBox["A trained char-level transformer",
+  FontWeight->Bold],
+ " on Tiny Shakespeare (1.8M parameters), saved to ",
+ StyleBox["data/charlevel_shakespeare_trained.wlnet",
+  FontFamily->"Courier"],
+ ".  Reusable in Parts 5\[Dash]8.\n",
+ "\[FilledSquare] ",
+ StyleBox["A complete training loop",
+  FontWeight->Bold],
+ " (",
+ StyleBox["trainGptModel",
+  FontFamily->"Courier"],
+ ") that auto-wraps the model in a softmax for proper cross-entropy ",
+ "computation, ships a cosine + linear-warmup schedule, and saves a ",
+ "checkpoint every five minutes.\n",
+ "\[FilledSquare] ",
+ StyleBox["A bug postmortem",
+  FontWeight->Bold],
+ " on the silent softmax-omission failure: when your cross-entropy ",
+ "loss goes negative, look at the model output.\n",
+ "\[FilledSquare] ",
+ StyleBox["A training-in-progress gallery",
+  FontWeight->Bold],
+ " of generations evolving across rounds (Section 6).\n",
+ "\[FilledSquare] ",
+ StyleBox["A cloud-submission path",
+  FontWeight->Bold],
+ " (",
+ StyleBox["submitRemotePretraining",
+  FontFamily->"Courier"],
+ ") for scaling to the 25M or 124M tiers on Wolfram Cloud."
+}], "Text",ExpressionUUID->"2baf2bd0-2466-4d35-a1b2-937173d5dc23"],
+
+Cell[TextData[{
+ "In ",
+ StyleBox["Part 5",
+  FontWeight->Bold],
+ " we look at the inference side of this model: greedy decoding, ",
+ "temperature sampling, top-k, top-p, beam search, and speculative ",
+ "decoding."
+}], "Text",ExpressionUUID->"644682c7-01dc-4880-a19c-7a616dc94f91"],
+
+Cell["References", "Section",ExpressionUUID->"a4de62ca-8a76-4da5-8292-9f8429c8d3cb"],
+
+Cell["\<\
+Karpathy, A. (2015). The Unreasonable Effectiveness of Recurrent Neural \
+Networks.
+Hoffmann, J. et al. (2022). Training Compute-Optimal Large Language Models. \
+(Chinchilla.)
+Karpathy, A. (2025). nanochat.
+Raschka, S. (2024). Build a Large Language Model from Scratch. Manning.\
+\>", "Text",ExpressionUUID->"3ca05ca2-55c0-48f6-80ac-925f4bde62dc"]
+},
+Saveable->True,
+WindowSize->{900, 750},
+FrontEndVersion->"14.3 for Mac OS X ARM (64-bit) (July 8, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"531e7132-bd10-4f52-af93-00d6acb88ae0"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[554, 20, 153, 2, 70, "Title",ExpressionUUID->"3efb1a95-02ba-4fb6-a5eb-22a1f0a6a2fd"],
+Cell[710, 24, 128, 0, 70, "Subtitle",ExpressionUUID->"b3cb4b3d-f0d7-4d7f-a25e-dc1e65adc144"],
+Cell[841, 26, 527, 9, 70, "Text",ExpressionUUID->"c06065fc-75cc-42c4-a2b8-b3e3abf3ea96"],
+Cell[1371, 37, 383, 7, 70, "Text",ExpressionUUID->"d66a73ee-a938-4613-876e-62c09b4d01e3"],
+Cell[1757, 46, 94, 0, 70, "Section",ExpressionUUID->"33e12e5b-7dc4-4a9a-9dc7-741ab96bb9c4"],
+Cell[1854, 48, 534, 14, 70, "Text",ExpressionUUID->"a2b87189-11a4-415d-a4a8-74ce87261521"],
+Cell[2391, 64, 105, 0, 70, "Input",ExpressionUUID->"41c95af3-6745-4365-a23d-8548441fad01"],
+Cell[2499, 66, 338, 7, 70, "Input",ExpressionUUID->"c39d6f0a-77eb-45e9-9db6-8153df2f2242"],
+Cell[2840, 75, 197, 5, 70, "Input",ExpressionUUID->"1b7672ba-7991-4c73-935f-ebc7a09c3ac0"],
+Cell[3040, 82, 108, 0, 70, "Section",ExpressionUUID->"b6d2f31f-4c88-43a8-97b3-74a642808ac3"],
+Cell[3151, 84, 396, 6, 70, "Text",ExpressionUUID->"ba008ba6-5025-47ec-9c60-701a3b0ed486"],
+Cell[3550, 92, 485, 7, 70, "Text",ExpressionUUID->"f5aa67af-84ab-4612-a785-fa70ebc294c6"],
+Cell[4038, 101, 271, 5, 70, "Input",ExpressionUUID->"9f456765-100a-4105-b868-622f0f27348e"],
+Cell[4312, 108, 113, 0, 70, "Section",ExpressionUUID->"1930bec6-2436-41df-bfce-5f2ad92a93c8"],
+Cell[4428, 110, 303, 9, 70, "Text",ExpressionUUID->"8add0375-a919-45a3-90dd-eda53fdefcce"],
+Cell[4734, 121, 551, 12, 70, "Input",ExpressionUUID->"dfd20ce0-4a93-4fb5-a693-8f460ecb1258"],
+Cell[5288, 135, 291, 6, 70, "Text",ExpressionUUID->"c677feb7-2c36-4dff-baa2-3f21e094b376"],
+Cell[5582, 143, 123, 0, 70, "Section",ExpressionUUID->"9949697a-0684-4acd-b644-fff99edd3cc2"],
+Cell[5708, 145, 260, 4, 70, "Text",ExpressionUUID->"817676d8-7ff1-4317-aef6-a8fbc8656228"],
+Cell[5971, 151, 187, 3, 70, "Input",ExpressionUUID->"74192204-9a60-4088-b71d-6c5c4216c53f"],
+Cell[6161, 156, 747, 21, 70, "Text",ExpressionUUID->"2aaf973d-b10b-4794-9587-116a2f31cbba"],
+Cell[6911, 179, 884, 19, 70, "Text",ExpressionUUID->"f4a9085a-f884-4a3c-b838-91ea6ad1b860"],
+Cell[7798, 200, 163, 2, 70, "Input",ExpressionUUID->"d2cb8e88-b1d8-4f9c-94a0-0ec9fd19a5c8"],
+Cell[7964, 204, 483, 9, 70, "Text",ExpressionUUID->"45ed29b4-97eb-4a30-a491-20b7f756eb07"],
+Cell[8450, 215, 490, 10, 70, "Text",ExpressionUUID->"d88c708c-41b8-45f0-b241-6982d5dbf8d7"],
+Cell[8943, 227, 133, 0, 70, "Section",ExpressionUUID->"3132c676-b00a-4297-a5e6-022dc6b26bb6"],
+Cell[9079, 229, 116, 0, 70, "Subsection",ExpressionUUID->"6a558def-6192-4c1b-9034-cc70e8f55043"],
+Cell[9198, 231, 267, 4, 70, "Text",ExpressionUUID->"c47d4502-3cc8-4bf7-8619-2b738bea80f4"],
+Cell[9468, 237, 356, 8, 70, "Input",ExpressionUUID->"8dddd601-7e82-4279-8ca0-c9861d0f83f7"],
+Cell[9827, 247, 104, 0, 70, "Subsection",ExpressionUUID->"3cea46d8-27a1-4088-b9e9-ffdd6292179f"],
+Cell[9934, 249, 426, 10, 70, "Text",ExpressionUUID->"50fbc4f7-ed51-4d83-8a53-29e5346f5485"],
+Cell[10363, 261, 119, 0, 70, "Subsection",ExpressionUUID->"c100a78a-5e4c-4073-8269-28944784c210"],
+Cell[10485, 263, 522, 11, 70, "Text",ExpressionUUID->"ff5d0b87-a8fb-48ed-aa19-87ceeab09234"],
+Cell[11010, 276, 117, 0, 70, "Section",ExpressionUUID->"80da092f-f32c-416e-861c-2a80531eb840"],
+Cell[11130, 278, 547, 12, 70, "Text",ExpressionUUID->"94d28c16-163d-4dc7-8723-af3588a88bf3"],
+Cell[11680, 292, 266, 11, 70, "Subsubsection",ExpressionUUID->"a806f4f1-2978-4e0e-b131-12cb3a22f93c"],
+Cell[11949, 305, 327, 9, 70, "Program",ExpressionUUID->"3ccb4737-fc72-4527-a146-3979a3740771"],
+Cell[12279, 316, 329, 19, 70, "Program",ExpressionUUID->"5808e1e4-6fb2-4a0b-bdeb-bb42ac44199a"],
+Cell[12611, 337, 266, 11, 70, "Subsubsection",ExpressionUUID->"54f40ae2-07b8-4ab3-a2ca-15314df047ef"],
+Cell[12880, 350, 327, 10, 70, "Program",ExpressionUUID->"e83ea6fa-4072-4822-adc7-3741bbb1805b"],
+Cell[13210, 362, 329, 16, 70, "Program",ExpressionUUID->"49b7b8e6-07ab-426b-8b44-4b72edd2ae0d"],
+Cell[13542, 380, 266, 11, 70, "Subsubsection",ExpressionUUID->"cf20793d-815d-4450-8908-39532bbf2601"],
+Cell[13811, 393, 327, 12, 70, "Program",ExpressionUUID->"4120b426-0eb1-4398-bfa9-e6a4094655db"],
+Cell[14141, 407, 329, 14, 70, "Program",ExpressionUUID->"426ff6f0-4f11-4b0e-b163-6874323472de"],
+Cell[14473, 423, 267, 11, 70, "Subsubsection",ExpressionUUID->"04a586c1-9a78-48b9-a87e-94fced08b56e"],
+Cell[14743, 436, 327, 14, 70, "Program",ExpressionUUID->"4deb4f7c-c178-4605-b3fc-81aa7e2cc412"],
+Cell[15073, 452, 329, 14, 70, "Program",ExpressionUUID->"e0920fae-038b-46d9-8ba4-fc4e409521d8"],
+Cell[15405, 468, 267, 11, 70, "Subsubsection",ExpressionUUID->"584a8b89-5168-4b61-bba9-dd594edd2a6b"],
+Cell[15675, 481, 327, 11, 70, "Program",ExpressionUUID->"210b5775-260d-4cf8-ac10-6e88338cdf69"],
+Cell[16005, 494, 329, 13, 70, "Program",ExpressionUUID->"4234d566-d923-4446-bf06-7772f25d8485"],
+Cell[16337, 509, 268, 11, 70, "Subsubsection",ExpressionUUID->"611a6085-0060-4072-8e6c-57ee82b992f1"],
+Cell[16608, 522, 327, 9, 70, "Program",ExpressionUUID->"db944c2c-b84a-4aea-a469-261276b83e09"],
+Cell[16938, 533, 329, 11, 70, "Program",ExpressionUUID->"37a7dffd-ee9b-4a54-bb32-390cb88c0ca2"],
+Cell[17270, 546, 268, 11, 70, "Subsubsection",ExpressionUUID->"8c88cc22-510d-403b-b341-4f5c8eb734c8"],
+Cell[17541, 559, 327, 11, 70, "Program",ExpressionUUID->"9560f071-c5e4-462d-9236-8458d873263e"],
+Cell[17871, 572, 329, 9, 70, "Program",ExpressionUUID->"2ce7771d-a090-4394-916d-78391acd7fef"],
+Cell[18203, 583, 268, 11, 70, "Subsubsection",ExpressionUUID->"b6140f38-a1d9-4d56-abb1-ddc12af5801c"],
+Cell[18474, 596, 327, 16, 70, "Program",ExpressionUUID->"e3df7c0f-1c83-434a-925c-d4a7eed73190"],
+Cell[18804, 614, 329, 11, 70, "Program",ExpressionUUID->"0f1a5409-d678-4a00-b4e3-1894b807437c"],
+Cell[19136, 627, 268, 11, 70, "Subsubsection",ExpressionUUID->"854263c8-7ff9-4560-9bb4-1aa840badb9a"],
+Cell[19407, 640, 327, 9, 70, "Program",ExpressionUUID->"eacc599e-b7d3-4ade-8599-e3d5ceb49382"],
+Cell[19737, 651, 329, 10, 70, "Program",ExpressionUUID->"90cc88a8-262b-4050-b6a1-90e10f828410"],
+Cell[20069, 663, 268, 11, 70, "Subsubsection",ExpressionUUID->"10af605d-7eb6-4a3f-84f1-560e1e06320a"],
+Cell[20340, 676, 327, 11, 70, "Program",ExpressionUUID->"bfeaf4d1-37f2-45af-a53f-1476aced48dd"],
+Cell[20670, 689, 329, 9, 70, "Program",ExpressionUUID->"fd408e4d-be9e-43fa-9c7e-89c6d6a38c29"],
+Cell[21002, 700, 268, 11, 70, "Subsubsection",ExpressionUUID->"b74ca8aa-8fb3-4e41-9b7c-be7fb0a39761"],
+Cell[21273, 713, 327, 13, 70, "Program",ExpressionUUID->"3e0fb2e0-2981-44bc-b335-f660ac2d16bf"],
+Cell[21603, 728, 329, 11, 70, "Program",ExpressionUUID->"1013e501-6635-45ce-91a2-0d10d2c41d86"],
+Cell[21935, 741, 268, 11, 70, "Subsubsection",ExpressionUUID->"8ae9ab39-147f-4fe5-9d80-1f02c3b6ff7c"],
+Cell[22206, 754, 327, 9, 70, "Program",ExpressionUUID->"3f7f2dc5-5840-4d6e-b187-e4e82b29dac4"],
+Cell[22536, 765, 329, 11, 70, "Program",ExpressionUUID->"941bbf6d-3382-416f-be7f-bb91df6c39d4"],
+Cell[22868, 778, 268, 11, 70, "Subsubsection",ExpressionUUID->"ed290c2c-8746-4063-9cfa-e2c830665fda"],
+Cell[23139, 791, 327, 9, 70, "Program",ExpressionUUID->"5e4e8b34-7bbc-400e-b4e9-795366c83568"],
+Cell[23469, 802, 329, 12, 70, "Program",ExpressionUUID->"d19a1b7b-cdea-44d9-a88c-da5029765953"],
+Cell[23801, 816, 268, 11, 70, "Subsubsection",ExpressionUUID->"60b6c1d8-51b8-4efc-b6b5-c9736106d23f"],
+Cell[24072, 829, 327, 13, 70, "Program",ExpressionUUID->"4c078d78-087a-446a-9b06-cc658216a608"],
+Cell[24402, 844, 329, 12, 70, "Program",ExpressionUUID->"abe68692-244e-40b5-b0e2-45f75a56221f"],
+Cell[24734, 858, 268, 11, 70, "Subsubsection",ExpressionUUID->"a2130654-17d7-488b-9921-7dee6e86bef6"],
+Cell[25005, 871, 327, 9, 70, "Program",ExpressionUUID->"e2109c31-1f1d-4c52-aeae-439cad4f96c3"],
+Cell[25335, 882, 329, 12, 70, "Program",ExpressionUUID->"13a94b66-fa97-41ec-a2bc-add306741bf7"],
+Cell[25667, 896, 268, 11, 70, "Subsubsection",ExpressionUUID->"63e22302-0005-44b2-b095-5016e1b9c900"],
+Cell[25938, 909, 327, 11, 70, "Program",ExpressionUUID->"3d6475bc-7d7a-4706-a46f-2ca9386b427b"],
+Cell[26268, 922, 329, 9, 70, "Program",ExpressionUUID->"a1dcc623-c223-4630-90d9-57320c140573"],
+Cell[26600, 933, 268, 11, 70, "Subsubsection",ExpressionUUID->"099116b5-0165-49c3-9453-a3057c23e418"],
+Cell[26871, 946, 327, 11, 70, "Program",ExpressionUUID->"b410102b-6452-4687-8f25-a843816f09fc"],
+Cell[27201, 959, 329, 9, 70, "Program",ExpressionUUID->"16bff358-b486-42b4-b06e-bc27813bcc4e"],
+Cell[27533, 970, 268, 11, 70, "Subsubsection",ExpressionUUID->"f07c6962-8aea-4b93-9102-2ba19123544c"],
+Cell[27804, 983, 327, 9, 70, "Program",ExpressionUUID->"0a262355-858c-4de1-a855-1a12e98e4ed7"],
+Cell[28134, 994, 329, 11, 70, "Program",ExpressionUUID->"6045a322-5a8c-44bc-ab38-3dfd48d719ba"],
+Cell[28466, 1007, 268, 11, 70, "Subsubsection",ExpressionUUID->"3ed464d0-5685-4642-96b5-cd5976b5e7af"],
+Cell[28737, 1020, 327, 9, 70, "Program",ExpressionUUID->"716d93a2-e122-4233-9df3-5b112d4e2a7b"],
+Cell[29067, 1031, 329, 9, 70, "Program",ExpressionUUID->"82d0814f-a870-4b68-95b4-f253717d81c8"],
+Cell[29399, 1042, 105, 0, 70, "Section",ExpressionUUID->"46a42a3a-584c-492a-8296-d803dfa2d517"],
+Cell[29507, 1044, 116, 0, 70, "Input",ExpressionUUID->"1f576738-702f-488c-a3f3-4faeabd63ec0"],
+Cell[29626, 1046, 370, 5, 70, "Text",ExpressionUUID->"7a38806e-ae3d-45d9-8aa2-12c61b3e7480"],
+Cell[29999, 1053, 631, 9, 70, "Text",ExpressionUUID->"d5e0df07-6353-4574-ba8d-8c1d6d7322fa"],
+Cell[30633, 1064, 244, 4, 70, "Input",ExpressionUUID->"39a3f006-a560-4dbf-9496-ebf989b926e5"],
+Cell[30880, 1070, 85, 0, 70, "Section",ExpressionUUID->"037c0f76-8c47-44c7-8021-09199c1ad49a"],
+Cell[30968, 1072, 1208, 33, 70, "Text",ExpressionUUID->"2baf2bd0-2466-4d35-a1b2-937173d5dc23"],
+Cell[32179, 1107, 282, 7, 70, "Text",ExpressionUUID->"644682c7-01dc-4880-a19c-7a616dc94f91"],
+Cell[32464, 1116, 84, 0, 70, "Section",ExpressionUUID->"a4de62ca-8a76-4da5-8292-9f8429c8d3cb"],
+Cell[32551, 1118, 357, 7, 70, "Text",ExpressionUUID->"3ca05ca2-55c0-48f6-80ac-925f4bde62dc"]
+}
+]
+*)
+
+(* End of internal cache information *)

@@ -1,0 +1,19 @@
+{
+	"elapsedMinutes":5.1000000000000005,
+	"nExamples":500,
+	"nEpochs":1,
+	"roundLossList":[
+		1.692721309006214
+	],
+	"finalLoss":1.692721309006214,
+	"modelPath":"\/Users\/thiel\/GitHub\/LLM-A-to-Z-in-WL\/discussion-model\/data\/discussion_sft.wlnet",
+	"modelSizeMB":4.748e2,
+	"generations":{
+		"User: What is a sonnet?\\nAssistant:":" The sonnet is a network-based network protocol, or MAC, that has two stages:\n\n1. Link Layer: A network protocol that establishes a link between two nodes for use in a network.\n\n2. Layer 2: A network protocol that contains both the link layer and the backbone layer of the network.\n\n3. Layer 3: A protocol that provides for secure communication between nodes on",
+		"User: How are you today?\\nAssistant:":" I am today I am grateful to have been able to share with you the joy and joy of being a true pioneer in the field of aviation. This has been an honor and special moment for me since I finally left home to pursue my personal dream of becoming a pilot. I am so grateful for the opportunity to share this moment with you and thank you for your continued support.\n\nI can't",
+		"User: Give three tips for staying healthy.\\nAssistant:":" 1. Stay in tune with your body's natural rhythms. When you are comfortable, your body will work to adapt to the body's natural rhythms. By following these natural rhythms, your body can make healthy decisions about what to do.\n2. Keep your energy level low, especially during exercise. Exercise is a powerful source of energy, and it helps to stay hydrated while you exercise.\n",
+		"User: Who wrote Hamlet?\\nAssistant:":" Hamlet is written as a story about a man who finds himself in a relationship with a woman, but not always with the love of his life. His love for woman comes from a deep love for her, and it is a powerful theme in his story.\n t t t t t t t t t t t t t t t t t t t t t t t t t t t",
+		"User: What's a good way to learn a new language?\\nAssistant:":" Language learning: A fundamental aspect of language learning is the creation of new language and its tools, often through learning. Learning languages is a process of learning and development that involves learning new languages and developing tools to assist in the process. Learning languages can be created using the techniques described below, such as the introduction, usage, and development of new languages.\n1. Introduction\n2. User Learning\n",
+		"User: Tell me a short joke.\\nAssistant:":" A short joke is a funny funny joke that conveys a specific story or event. It conveys a message or event with a specific meaning.\n\nExamples of short jokes that convey a specific message include:\n\n\"Hey, look at that hair!\"\n\n\"It's a good day!\"\n\n\"It's a nice day.\"\n\n\"It's a nice day.\"\n t t t t t"
+	}
+}

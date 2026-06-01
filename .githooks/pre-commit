@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Per-repo override of the global pre-commit hook. Identical checks, but the
+# secret-name regex is anchored to word boundaries so that legitimate paths
+# like "part-01-tokeniser-and-embeddings/..." don't match the "token" rule.
+set -euo pipefail
+
+# Secret-name guard. Each alternative is anchored to a non-name boundary so
+# "tokeniser" and "credentialsmanager" don't trigger; ".env", "api_token",
+# "id_ed25519", and "/credentials.json" still do.
+if git diff --cached --name-only \
+  | grep -E '(^|[/_.-])(\.env|id_ed25519|apikey|token|credentials)([/_.-]|$)' >/dev/null; then
+  echo "ERROR: looks like you're committing secrets; aborting." >&2
+  exit 1
+fi
+
+# Large-file guard (50 MB, excludes Git LFS).
+while read -r f; do
+  [ -f "$f" ] || continue
+  s=$(wc -c <"$f")
+  if [ "$s" -gt $((50*1024*1024)) ] && ! git check-attr -a "$f" | grep -qi 'filter=lfs'; then
+    echo "ERROR: $f >50MB and not in Git LFS; aborting." >&2
+    exit 1
+  fi
+done < <(git diff --cached --name-only)

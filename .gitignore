@@ -1,0 +1,64 @@
+.DS_Store
+*.swp
+*.bak
+
+# Cached corpora & regenerable artefacts.
+**/data/*.txt
+!**/data/README.md
+
+# Trained checkpoints --- keep the small ones (1M / 5M / 1.8M-char)
+# but exclude the 498 MB GPT-2 weights (above GitHub's 100 MB limit;
+# re-downloaded by NetModel on demand).
+part-02-self-attention/data/gpt2.wlnet
+part-02-self-attention/data/gpt2_v143.wlnet
+part-06-supervised-fine-tuning/data/gpt2_sft_chat.wlnet
+
+# Empty / corrupt write attempts.
+**/data/*.json.broken
+
+# Raw fetched corpora --- re-fetched via fetch scripts in src/.
+discussion-model/data/alpaca_cleaned.json
+discussion-model/data/dailydialog_*.txt
+
+# Discussion-model checkpoints (~498 MB; above GitHub's 100 MB ceiling).
+# Re-derive by running discussion-model/src/run_discussion_sft.wls.
+discussion-model/data/discussion_sft.wlnet
+discussion-model/data/discussion_sft_ckpt.wlnet
+discussion-model/data/discussion_medium_20k.wlnet
+discussion-model/data/discussion_large_10k.wlnet
+discussion-model/data/discussion_console.log
+
+# Weight bridge intermediates / assembled HF model directory
+# (~1.4 GB of safetensors; re-derive by running export_wl_to_hf.wls + load_into_hf.py)
+discussion-model/data/hf_weights/
+discussion-model/data/hf_model/
+
+# WL session crumbs.
+*.nb.bak
+*~
+.MathLink/
+
+# Local-only experiments.
+scratch/
+
+# AWS notebooks with embedded credentials / ServiceObject handles -- DO NOT COMMIT.
+AWSforArnoldTongue.nb
+RemoteBatchSubmitAWS.nb
+RemoteBatchSubmit-withSpot.nb
+# Defence in depth: any file with AWS, ServiceObject, or RemoteBatchSubmit in the name at repo root.
+/AWS*.nb
+/*AWS*.nb
+/RemoteBatchSubmit*.nb
+
+# Part 9 derived token data (regenerate via preprocess_fineweb.py)
+part-09-from-scratch/data/*.bin
+part-09-from-scratch/test.nb
+part-09-from-scratch/data/models/
+part-09-from-scratch/data/generations.json
+part-09-from-scratch/data/prompts_encoded.json
+part-09-from-scratch/data/alpaca_sft.bin
+part-09-from-scratch/data/questions_encoded.json
+part-09-from-scratch/data/generations_v3.json
+
+# Local Claude Code tooling state
+.claude/

@@ -1,0 +1,20 @@
+{
+	"vocabSize":4064,
+	"trainTokens":284082,
+	"evalTokens":14952,
+	"spec":{
+		"label":"tiny",
+		"dModel":96,
+		"nHeads":4,
+		"nLayers":3,
+		"dFF":256,
+		"vocabSize":4064,
+		"maxSeqLen":64
+	},
+	"trainableParams":1050944,
+	"finalLoss":1.8214887498472583,
+	"wallSeconds":68.396404,
+	"samplePrompt":"ROMEO:",
+	"sampleBefore":"ROMEO<\/w>:<\/w>we'll<\/w>oft<\/w>PROSPERseem<\/w>CA<\/w>banishESCALUS<\/w>Warfall<\/w>EXETER<\/w>ten<\/w>hearing<\/w>Catesglad<\/w>broken<\/w>ims<\/w>CURTIwith<\/w>HASTINGS<\/w>dom<\/w>frawonder<\/w>branBesides<\/w>durplain<\/w>mp<\/w>pen<\/w>,farther<\/w>VOLUMNIA<\/w>whom<\/w>MAMILLIUS<\/w>success<\/w>e'll<\/w>BRAKdangattenknowEX",
+	"sampleAfter":"ROMEO<\/w>:<\/w>!<\/w>!<\/w>!<\/w>a<\/w>!<\/w>!<\/w>!<\/w>!<\/w>!<\/w>this<\/w>!<\/w>them<\/w>a<\/w>!<\/w>!<\/w>!<\/w>!<\/w>what<\/w>be<\/w>:<\/w>!<\/w>Her<\/w>!<\/w>at<\/w>!<\/w>!<\/w>!<\/w>!<\/w>!<\/w>!<\/w>order<\/w>!<\/w>a<\/w>by<\/w>a<\/w>!<\/w>!<\/w>!<\/w>!<\/w>!<\/w>"
+}

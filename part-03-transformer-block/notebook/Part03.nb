@@ -1,0 +1,822 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[     34808,        813]
+NotebookOptionsPosition[     28789,        738]
+NotebookOutlinePosition[     29146,        754]
+CellTagsIndexPosition[     29103,        751]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell["\<\
+Build a Large Language Model from Scratch \[LongDash] in Wolfram Language\
+\>", "Title",ExpressionUUID->"21738e24-66ae-4b62-935c-150201b6275e"],
+
+Cell["Part 3: The full transformer block + parameter accounting", "Subtitle",ExpressionUUID->"36413683-bc24-4268-9c57-9e69d3779bd2"],
+
+Cell[TextData[{
+ "Parts 1 and 2 produced two pieces: a tokeniser/embedder that turns ",
+ "text into a (seqLen, ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"03c9ba87-2f73-4116-844b-ee7f774a320f"],
+ ") tensor (Part 1), and a multi-head causal self-attention block ",
+ "that takes such a tensor and returns a tensor of the same shape ",
+ "(Part 2). Part 3 wraps that attention block inside the canonical ",
+ "transformer envelope and stacks the result ",
+ Cell[BoxData[
+  SubscriptBox["n", "layers"]], "Text",
+  FontSize->14,ExpressionUUID->"f845ce4a-155e-444a-8651-7cb03dd28db4"],
+ " times. We pick model sizes for Part 4's training runs, derive a ",
+ "closed-form parameter-count formula, and verify it empirically."
+}], "Text",ExpressionUUID->"5496b924-45bc-4d71-bb13-8300a45d1404"],
+
+Cell[BoxData[
+ RowBox[{"Import", "[", "\"\<figures/illustration_block_diagram.png\>\"", 
+  "]"}]], "Input",ExpressionUUID->"c811edea-d24c-42a8-8a7f-dafd09dc79f7"],
+
+Cell["1.  Setup", "Section",ExpressionUUID->"dda8bcd5-3786-49e3-a7e2-a8c10d2d5529"],
+
+Cell["\<\
+We need the Tokeniser package from Part 1 and the Attention package from Part \
+2. The new Transformer package on top of them adds the feed-forward block, \
+the full transformer block, and the model constructor.\
+\>", "Text",ExpressionUUID->"6f75a877-560c-4fea-b314-0e3887835ce5"],
+
+Cell["SetDirectory[NotebookDirectory[]]", "Input",ExpressionUUID->"075d3f83-d4e0-495a-afbf-38a475dff29b"],
+
+Cell["\<\
+Get[\"../../part-01-tokeniser-and-embeddings/src/Tokeniser.wl\"]\
+\>", "Input",ExpressionUUID->"7412ea9c-e001-42f0-86fd-aa161b238ef5"],
+
+Cell["Get[\"../../part-02-self-attention/src/Attention.wl\"]", "Input",ExpressionUUID->"016f8586-e596-4bad-9c79-373862cf29ff"],
+
+Cell["Get[\"src/Transformer.wl\"]", "Input",ExpressionUUID->"a815c1f7-2b02-4591-ae49-df45ece640e4"],
+
+Cell["2.  Position-wise feed-forward block", "Section",ExpressionUUID->"783a9bc9-6bb3-4872-9912-ab2fa1a7148f"],
+
+Cell[TextData[{
+ "The attention block lets every position look at every other position. ",
+ "But within each position, all it does is take a weighted average of ",
+ "value vectors. There is no per-position transformation that mixes the ",
+ "features of a single token nonlinearly \[LongDash] no place for the ",
+ "model to actually ",
+ StyleBox["compute",
+  FontSlant->Italic],
+ " on what it has gathered. The feed-forward block fixes that: a ",
+ "two-layer position-wise MLP with a non-linearity in the middle."
+}], "Text",ExpressionUUID->"9378adb6-0eb6-46ae-9ae7-bca40739eeb4"],
+
+Cell[TextData[{
+ "Two linear projections sandwich a GELU non-linearity: ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"7f19c7e9-1c7e-4722-a6c9-738fe177f18d"],
+ " \[Rule] ",
+ Cell[BoxData[
+  SubscriptBox["d", "ff"]], "Text",
+  FontSize->14,ExpressionUUID->"b7c94262-72c3-4fcf-90fa-9454cef09731"],
+ " \[Rule] ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"49579c76-fdaf-44eb-9d87-a703309772f4"],
+ ". Conventionally ",
+ Cell[BoxData[
+  SubscriptBox["d", "ff"]], "Text",
+  FontSize->14,ExpressionUUID->"7c36e95b-674e-415b-9edd-a1f6d184b270"],
+ " = 4 \[Times] ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"14a3bc07-c472-4d18-9d90-fb32f8db7448"],
+ "; this is where most of the model's parameter budget lives. The ",
+ "block is applied independently to every position of the sequence, ",
+ "hence wrapped in ",
+ StyleBox["NetMapOperator",
+  FontFamily->"Courier"],
+ "."
+}], "Text",ExpressionUUID->"51b5064b-eddf-42c7-bc1b-657eb8064e8f"],
+
+Cell["\<\
+ffn = LLMAtoZ`Transformer`feedForwardBlock[64, 256, 16];
+SeedRandom[1]; x = RandomReal[NormalDistribution[0, 0.1], {16, 64}];
+Dimensions[ffn[x]]\
+\>", "Input",ExpressionUUID->"c4697f34-0744-448b-8f56-d8914a85ceda"],
+
+Cell["3.  The transformer block, pre-norm style", "Section",ExpressionUUID->"b3f734dc-9110-426d-9a0a-bffaa682d68a"],
+
+Cell["Two sub-layers, each in its own residual connection:", "Text",ExpressionUUID->"22585606-5b2f-47d2-869e-394c2b241acd"],
+
+Cell["\<\
+    x' = x + Attention(LayerNorm(x))
+    y  = x' + FFN(LayerNorm(x'))\
+\>", "Text",ExpressionUUID->"95b2dd0c-5aaa-4c6c-81f0-23fd7bad0070"],
+
+Cell[TextData[{
+ "Two design choices visible here. First, the LayerNorm sits ",
+ StyleBox["before",
+  FontSlant->Italic],
+ " each sub-layer, not after. This is the ",
+ StyleBox["pre-norm",
+  FontWeight->Bold],
+ " ordering, which differs from the post-norm ordering in the original ",
+ "Vaswani et al. paper. We will look at the gradient-flow argument for ",
+ "pre-norm in a moment. Second, each sub-layer is wrapped in an ",
+ "additive residual \[LongDash] the sub-layer learns what to ",
+ StyleBox["add",
+  FontSlant->Italic],
+ " to the residual stream, not what to replace it with. The original ",
+ "ResNet argument applies: when a sub-layer's right answer is \
+\[OpenCurlyDoubleQuote]do nothing\[CloseCurlyDoubleQuote], it can learn ",
+ "to output zero rather than to learn the identity transformation."
+}], "Text",ExpressionUUID->"e0cd46bb-3b09-4ebb-9d35-bc1cef96580c"],
+
+Cell["\<\
+blk = LLMAtoZ`Transformer`transformerBlock[64, 4, 256, 16];
+blk[x] // Dimensions\
+\>", "Input",ExpressionUUID->"47a44292-b919-448d-873c-c404e774c936"],
+
+Cell["Information[blk, \"ArraysTotalElementCount\"]", "Input",ExpressionUUID->"f3f7db0e-d4c4-42ec-9d1a-96317c7b2f2c"],
+
+Cell["4.  Pre-norm vs post-norm", "Section",ExpressionUUID->"b7021109-9409-4aa1-857b-c487cef5f3ce"],
+
+Cell[TextData[{
+ "Why pre-norm? In a deep stack, what matters is whether the residual ",
+ "stream is ever destroyed. Pre-norm normalises the ",
+ StyleBox["input",
+  FontSlant->Italic],
+ " to each sub-layer, then adds the sub-layer's output to the unnormalised ",
+ "residual. The residual stream is never normalised, so a gradient flowing ",
+ "backward through ",
+ Cell[BoxData[
+  SubscriptBox["n", "layers"]], "Text",
+  FontSize->14,ExpressionUUID->"ee16787c-81a9-4b9d-975c-9c3193f3e580"],
+ " layers is the product of (1 + small_correction) factors, which is a ",
+ "well-behaved O(1) number. Post-norm normalises ",
+ StyleBox["after",
+  FontSlant->Italic],
+ " the residual addition, so each layer rescales the residual stream by ",
+ "1/std, and a gradient flowing backward is a product of repeatedly-rescaled ",
+ "numbers \[LongDash] which can compress to zero quickly."
+}], "Text",ExpressionUUID->"37235d8c-2041-42cd-b824-0170ae5e6a63"],
+
+Cell["\<\
+A synthetic illustration of the difference on randomly-initialised stacks (no \
+training, just forward-pass activation norms):\
+\>", "Text",ExpressionUUID->"d2bf375f-3713-4cd5-9850-1263e1a3ebcb"],
+
+Cell["Import[\"figures/pre_vs_post_norm_gradients.png\"]", "Input",ExpressionUUID->"e0a681aa-2405-4e4e-8233-e85030f4a7a2"],
+
+Cell["\<\
+Pre-norm grows linearly in depth (because each residual addition adds a small \
+random vector to an unnormalised stream); post-norm flattens because the \
+LayerNorm at the end of every block keeps the stream's magnitude pinned to 1. \
+The reverse situation in backprop is what makes post-norm hard to train at \
+depth without warmup tricks. Modern transformers (GPT-2/3, LLaMA, Mistral, \
+nanochat) all use pre-norm.\
+\>", "Text",ExpressionUUID->"d4b702ea-6075-4eca-a779-ad7805ba4715"],
+
+Cell["5.  The full GPT model", "Section",ExpressionUUID->"f3b07e16-6c67-4224-a698-7fb38ae6331d"],
+
+Cell[TextData[{
+ "Putting it together: token embedder + ",
+ Cell[BoxData[
+  SubscriptBox["n", "layers"]], "Text",
+  FontSize->14,ExpressionUUID->"eaf090c2-db42-4597-823b-3430e170e717"],
+ " transformer blocks + a final LayerNorm + an output projection of ",
+ "shape (",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"d1cea4c2-e430-4938-97c6-db315acaff5f"],
+ ", ",
+ Cell[BoxData[
+  RowBox[{"|", "V", "|"}]], "Text",
+  FontSize->14,ExpressionUUID->"f1914f54-c1d1-4d82-9443-e5de852906ea"],
+ ") that produces a logit at every ",
+ "position for every token in the vocabulary."
+}], "Text",ExpressionUUID->"ad540f13-e55c-4c03-8192-81079619b858"],
+
+Cell[TextData[{
+ "One small WL detail: the embedder from Part 1 has two input ports ",
+ "(\"tokens\" and \"positions\"), which a ",
+ StyleBox["NetChain",
+  FontFamily->"Courier"],
+ " cannot consume directly. The Transformer package exports a ",
+ StyleBox["chainEmbedder",
+  FontFamily->"Courier"],
+ " that uses ",
+ StyleBox["SequenceIndicesLayer",
+  FontFamily->"Courier"],
+ " to generate the positions internally, so we can drop the embedder ",
+ "into a chain along with the blocks."
+}], "Text",ExpressionUUID->"03fc1f9c-dcb8-4a39-937a-c54959183148"],
+
+Cell["\<\
+model = LLMAtoZ`Transformer`gptModel[256, 8, 6, 1024, 1064, 256];
+ids = RandomInteger[{1, 1064}, 256];
+Dimensions[model[ids]]\
+\>", "Input",ExpressionUUID->"cc837029-3378-4511-89ae-88a2c45ebbab"],
+
+Cell["\<\
+(seqLen, |V|) out, as promised. Every row of the output is the pre-softmax \
+logit vector at one position. During training we shift it by one and ask the \
+model to predict the next token. During inference we apply a softmax to the \
+last row and sample. Both come in Parts 4 and 5.\
+\>", "Text",ExpressionUUID->"89c69c20-6331-4db0-a4b7-11433b86045f"],
+
+Cell["6.  Counting parameters", "Section",ExpressionUUID->"6684cdc1-5f27-426b-b26b-92147dc423ff"],
+
+Cell[TextData[{
+ "A pre-norm transformer block of size (",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"a53ec639-c46c-457f-ae16-9eaffbc2546c"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["d", "ff"]], "Text",
+  FontSize->14,ExpressionUUID->"ff8b3141-7b07-4b33-ab4e-5a3c1023189b"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["n", "heads"]], "Text",
+  FontSize->14,ExpressionUUID->"53a532c6-be08-49cf-b7b7-7a72cef562d5"],
+ "):"
+}], "Text",ExpressionUUID->"e602c55c-e58b-4dd5-9af7-7e82f5a01807"],
+
+Cell[TextData[{
+ "\[FilledSmallCircle] Q, K, V projections summed over heads: ",
+ Cell[BoxData[
+  RowBox[{"3", 
+   SuperscriptBox[
+    SubscriptBox["d", "model"], "2"]}]], "Text",
+  FontSize->14,ExpressionUUID->"88032b01-6e80-4e2d-a785-e9cf45fd7d9f"],
+ " (no biases by convention).\n",
+ "\[FilledSmallCircle] Output projection: ",
+ Cell[BoxData[
+  SuperscriptBox[
+   SubscriptBox["d", "model"], "2"]], "Text",
+  FontSize->14,ExpressionUUID->"5af02eb5-a5f9-4127-8444-c9a3e063406c"],
+ ".\n",
+ "\[FilledSmallCircle] Two LayerNorms (scale + bias each): ",
+ Cell[BoxData[
+  RowBox[{"4", 
+   SubscriptBox["d", "model"]}]], "Text",
+  FontSize->14,ExpressionUUID->"90c2dc61-3882-45b8-838e-5f2328acb2e6"],
+ ".\n",
+ "\[FilledSmallCircle] FFN linear 1 (with bias): ",
+ Cell[BoxData[
+  RowBox[{
+   SubscriptBox["d", "model"], 
+   SubscriptBox["d", "ff"], 
+   RowBox[{" ", 
+    RowBox[{"+", " "}]}], 
+   SubscriptBox["d", "ff"]}]], "Text",
+  FontSize->14,ExpressionUUID->"0f5566ce-12c5-4f55-8d6f-b5f7b65afd6a"],
+ ".\n",
+ "\[FilledSmallCircle] FFN linear 2 (with bias): ",
+ Cell[BoxData[
+  RowBox[{
+   SubscriptBox["d", "ff"], 
+   SubscriptBox["d", "model"], 
+   RowBox[{" ", 
+    RowBox[{"+", " "}]}], 
+   SubscriptBox["d", "model"]}]], "Text",
+  FontSize->14,ExpressionUUID->"1eb5ddc2-d6a1-4157-8ea4-8d921757c6e3"],
+ "."
+}], "Text",ExpressionUUID->"616ca99a-2c74-4e35-b7a6-2798040723c1"],
+
+Cell[TextData[{
+ "Per block: ",
+ Cell[BoxData[
+  RowBox[{"4", 
+   SuperscriptBox[
+    SubscriptBox["d", "model"], "2"], 
+   RowBox[{" ", 
+    RowBox[{"+", " "}]}], "2", 
+   SubscriptBox["d", "model"], 
+   SubscriptBox["d", "ff"], 
+   RowBox[{" ", 
+    RowBox[{"+", " "}]}], 
+   SubscriptBox["d", "ff"], 
+   RowBox[{" ", 
+    RowBox[{"+", " "}]}], "5", 
+   SubscriptBox["d", "model"]}]], "Text",
+  FontSize->14,ExpressionUUID->"00737e3f-7ba6-404a-878d-56742b1eebc3"],
+ ". And on top of that, embeddings (",
+ Cell[BoxData[
+  RowBox[{
+   SubscriptBox["d", "model"], 
+   RowBox[{"(", 
+    RowBox[{"|", "V", "|"}], 
+    RowBox[{" ", 
+     RowBox[{"+", " "}]}], 
+    SubscriptBox["n", "max"], ")"}]}]], "Text",
+  FontSize->14,ExpressionUUID->"c9d71166-afe2-4ac2-8e48-2062185b15f4"],
+ "), a final LayerNorm (2",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"0e3afd04-d605-4eba-b867-fe35c58377e2"],
+ "), and an output projection ",
+ "(",
+ Cell[BoxData[
+  RowBox[{
+   SubscriptBox["d", "model"], 
+   RowBox[{"|", "V", "|"}], 
+   RowBox[{" ", 
+    RowBox[{"+", " "}]}], 
+   RowBox[{"|", "V", "|"}]}]], "Text",
+  FontSize->14,ExpressionUUID->"98e225d1-ea15-43d2-91cf-3807e3da949f"],
+ ")."
+}], "Text",ExpressionUUID->"a6b1a812-ecda-4bd8-8497-db6c171b4c58"],
+
+Cell[TextData[{
+ "The exported function ",
+ StyleBox["parameterCount[spec]",
+  FontFamily->"Courier"],
+ " computes this closed form; ",
+ StyleBox["parameterCountFull[spec]",
+  FontFamily->"Courier"],
+ " adds the frozen causal-mask arrays we bake into each attention head ",
+ "(one ",
+ Cell[BoxData[
+  SubscriptBox["n", "heads"]], "Text",
+  FontSize->14,ExpressionUUID->"ace5f987-736c-49b5-b6ce-78643ad74534"],
+ " \[Times] (maxSeqLen)\[Times](maxSeqLen) tensor ",
+ "per layer), which is what WL's ",
+ StyleBox["Information[net, \"ArraysTotalElementCount\"]",
+  FontFamily->"Courier"],
+ " counts."
+}], "Text",ExpressionUUID->"0cb3e173-8b13-484a-84e6-2e08feccd5bb"],
+
+Cell["\<\
+spec = LLMAtoZ`Transformer`modelSpec5M[1064, 256];
+trainable = LLMAtoZ`Transformer`parameterCount[spec];
+full = LLMAtoZ`Transformer`parameterCountFull[spec];
+actual = Information[
+  LLMAtoZ`Transformer`gptModel[spec[\"dModel\"], spec[\"nHeads\"], \
+spec[\"nLayers\"],
+    spec[\"dFF\"], spec[\"vocabSize\"], spec[\"maxSeqLen\"]],
+  \"ArraysTotalElementCount\"];
+{trainable, full, actual}\
+\>", "Input",ExpressionUUID->"7c83cd4c-d6b1-424e-9d3f-d6bbbac63e3a"],
+
+Cell[TextData[{
+ "Trainable, full (with frozen masks), and actual agree exactly. The ",
+ "frozen masks are non-trainable arrays the optimizer never touches; ",
+ "they exist only because we stored the causal mask as a constant ",
+ "inside the attention NetGraph. By convention we name our models by ",
+ "their ",
+ StyleBox["trainable",
+  FontSlant->Italic],
+ " parameter count, so the 5M model truly has 5.3M trainable params."
+}], "Text",ExpressionUUID->"cf31394f-f309-44e7-8370-dedf32ad1c4e"],
+
+Cell["Where do those parameters live?", "Text",ExpressionUUID->"3681c4fb-5ea2-4df7-adb6-1a57da012bde"],
+
+Cell["Import[\"figures/params_breakdown.png\"]", "Input",ExpressionUUID->"bad01db0-3b57-4045-aa78-a3b883000855"],
+
+Cell["\<\
+Most of the trainable parameters (37%) live in the FFN; the frozen causal \
+masks contribute another 37% of the array count even though they are not \
+trainable. The attention QKV projections account for 14%. The embedding \
+tables, output projection, and LayerNorms contribute the remaining low \
+single-digit percentages. This is the shape one finds across most transformer \
+sizes; the picture changes for very small models where the embedding tables \
+dominate, and for very large models where attention QKV catches up to FFN.\
+\>", "Text",ExpressionUUID->"9d9b0106-d12d-4c89-9454-2f5cd592e865"],
+
+Cell["7.  Three sizes for Part 4", "Section",ExpressionUUID->"a18f75ac-a266-4161-abc0-e9296845beea"],
+
+Cell["\<\
+The training run in Part 4 needs a small ladder of model sizes so we can \
+recover a Chinchilla-style loss-vs-compute signature. The package exports \
+three reference specs at the Tiny Shakespeare scale (|V| = 1064, maxSeqLen = \
+256):\
+\>", "Text",ExpressionUUID->"044842a0-3997-4d96-a149-7aded48b3efb"],
+
+Cell["\<\
+Grid[
+  Prepend[
+    Table[
+      With[{s = ms},
+        {s[\"label\"], s[\"dModel\"], s[\"nHeads\"], s[\"nLayers\"], \
+s[\"dFF\"],
+         LLMAtoZ`Transformer`parameterCount[s],
+         LLMAtoZ`Transformer`parameterCountFull[s]}],
+      {ms, LLMAtoZ`Transformer`modelSizeSweep[1064, 256]}],
+    {\"label\", \"d_model\", \"n_heads\", \"n_layers\", \"d_ff\",
+     \"trainable\", \"with frozen masks\"}],
+  Frame -> All, Background -> {None, {LightGray, None, None}},
+  Alignment -> Center, Spacings -> {1.5, 0.5}]\
+\>", "Input",ExpressionUUID->"c99f0246-d533-4698-b770-2ed14dfd3a7d"],
+
+Cell["7.1  Interactive: dial your own model", "Subsection",ExpressionUUID->"6ca5b4a1-7400-4789-9c78-088abafc017d"],
+
+Cell[TextData[{
+ "Pick any (",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"083beaf5-9a4c-43c6-92ab-5739d8b93ea3"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["d", "ff"]], "Text",
+  FontSize->14,ExpressionUUID->"6218353d-92ce-47ec-b8ea-e358d04ca808"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["n", "layers"]], "Text",
+  FontSize->14,ExpressionUUID->"23547f7c-b846-4c3f-9368-fba6815b9329"],
+ ") combination ",
+ "and read off the parameter count on the fly. Common ratios: ",
+ Cell[BoxData[
+  SubscriptBox["d", "ff"]], "Text",
+  FontSize->14,ExpressionUUID->"c1606050-ead8-4c5c-856b-7ec88ae0aec2"],
+ " = 4",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"ab895f25-501b-4a59-b7ee-9055787e9b34"],
+ " for standard transformers; ",
+ Cell[BoxData[
+  SubscriptBox["d", "ff"]], "Text",
+  FontSize->14,ExpressionUUID->"a9487b7a-8943-4097-8770-9d2d4d9ecd8c"],
+ " between 2",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"59172055-45be-4053-8cb7-e53fffc87afc"],
+ " and 4",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"0ed4fa4c-1f1d-48e9-8a5c-a05f79d464ec"],
+ " for nanochat and recent compact architectures."
+}], "Text",ExpressionUUID->"a6834959-500f-4451-a65e-887a592558ad"],
+
+Cell["\<\
+Manipulate[
+  With[{spec = <|\"dModel\" -> d, \"nHeads\" -> h, \"nLayers\" -> L,
+                 \"dFF\" -> f, \"vocabSize\" -> v, \"maxSeqLen\" -> n|>},
+    Column[{
+      Style[Row[{\"trainable params: \",
+        Style[NumberForm[LLMAtoZ`Transformer`parameterCount[spec], DigitBlock \
+-> 3],
+              Bold, 18, ColorData[97][1]]}], 14],
+      Style[Row[{\"with frozen masks: \",
+        Style[NumberForm[LLMAtoZ`Transformer`parameterCountFull[spec], \
+DigitBlock -> 3],
+              Bold, 14, ColorData[97][2]]}], 12],
+      Style[Row[{\"size ratio FFN/attention: \",
+        NumberForm[N[(2 d f + f + d) / (4 d^2 + 4 d)], 3]}], 12, Gray]
+    }]
+  ],
+  {{d, 256, \"d_model\"}, 64, 1024, 64, Appearance -> \"Labeled\"},
+  {{h, 8, \"n_heads\"}, 4, 16, 4, Appearance -> \"Labeled\"},
+  {{L, 6, \"n_layers\"}, 1, 24, 1, Appearance -> \"Labeled\"},
+  {{f, 1024, \"d_ff\"}, 256, 4096, 256, Appearance -> \"Labeled\"},
+  {{v, 1064, \"|V|\"}, 256, 50000, 256, Appearance -> \"Labeled\"},
+  {{n, 256, \"max_seq_len\"}, 64, 2048, 64, Appearance -> \"Labeled\"},
+  ControlPlacement -> Top]\
+\>", "Input",ExpressionUUID->"2928bc93-8f85-4fb2-969a-f361d4241fae"],
+
+Cell["8.  Reconstructing GPT-2 from our primitives", "Section",ExpressionUUID->"2b666966-9d25-4d70-9055-36f158257fe2"],
+
+Cell[TextData[{
+ "A natural question: is our ",
+ StyleBox["gptModel",
+  FontFamily->"Courier"],
+ " constructor really general, or is it a toy that only handles the ",
+ "1M/5M/25M reference sizes? The answer: plug in GPT-2 small's ",
+ "architectural spec and you get GPT-2 small \[Dash] the same ",
+ "architecture OpenAI shipped in 2019, parameter-count exact."
+}], "Text",ExpressionUUID->"93be9914-16d1-4539-ad9f-746402938ed3"],
+
+Cell["\<\
+spec = LLMAtoZ`Transformer`gpt2SmallSpec[];
+spec\
+\>", "Input",ExpressionUUID->"0ba16177-8e50-4694-8c85-1e4cd5ec1549"],
+
+Cell["\<\
+Without weight tying the parameter formula gives ~163M; with weight tying \
+(sharing the input-embedding matrix with the output projection, transposed) \
+it gives 124.45M, matching real GPT-2 small (124.44M) to within ~13K \
+parameters. The residual is a tiny convention gap in how LayerNorm biases are \
+counted.\
+\>", "Text",ExpressionUUID->"94b3a934-aa4e-4c4b-baaa-a2b4e9761848"],
+
+Cell["\<\
+{LLMAtoZ`Transformer`parameterCount[spec],
+ LLMAtoZ`Transformer`parameterCount[spec, \"WeightTying\" -> True]}\
+\>", "Input",ExpressionUUID->"b7949e00-9dc8-4a62-b5ba-957fd2bc5102"],
+
+Cell["\<\
+Two equivalent ways forward exist for the rest of the series:\
+\>", "Text",ExpressionUUID->"583755dd-a10b-4568-abd9-06e129003562"],
+
+Cell[TextData[{
+ "\[FilledCircle] ",
+ StyleBox["Path A: build from scratch.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["buildGpt2Architecture[\"Small\"]",
+  FontFamily->"Courier"],
+ " constructs an empty 124M-parameter net at GPT-2's spec. You then ",
+ "train it from random init (Part 4 onward). On a Mac mini this is ",
+ "infeasible \[LongDash] but the architectural code is yours.\n",
+ "\[FilledCircle] ",
+ StyleBox["Path B: load the pretrained NetModel.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["loadPrebuiltGpt2[]",
+  FontFamily->"Courier"],
+ " returns OpenAI's trained checkpoint via WL's Neural Network ",
+ "Repository (498 MB on first download). You skip pretraining and ",
+ "fine-tune from real pretrained weights (Part 6 onward), which is ",
+ "what the cloud-cheap and cloud-real tiers actually do."
+}], "Text",ExpressionUUID->"4540761c-d1e5-4410-9664-3f955234ba29"],
+
+Cell[TextData[{
+ "We will choose between these in ",
+ StyleBox["Tiers.wl",
+  FontFamily->"Courier"],
+ " (introduced in Part 4): a single named tier sets the model spec, ",
+ "the training corpus, and whether to use ",
+ StyleBox["buildGpt2Architecture",
+  FontFamily->"Courier"],
+ " or ",
+ StyleBox["loadPrebuiltGpt2",
+  FontFamily->"Courier"],
+ " as the starting point."
+}], "Text",ExpressionUUID->"e97e6aae-2c4a-4e63-a7e3-c8c76a51034a"],
+
+Cell[TextData[{
+ "A sanity check we ",
+ StyleBox["can",
+  FontSlant->Italic],
+ " do on a Mac mini: compare the two architectures' top-level ",
+ "structure without instantiating the full 124M net."
+}], "Text",ExpressionUUID->"69707f1d-06aa-4a35-8001-89b6ac6daf31"],
+
+Cell["\<\
+(* Don't build the full 124M net at notebook-eval time;
+   it's slow and memory-hungry.  Inspect the spec instead. *)
+specSummary = <|
+  \"OurArchitecture\" -> \"gptModel[gpt2SmallSpec]: 12-layer pre-norm,
+     12 heads, d_model 768, d_ff 3072, vocab 50257, max_seq 1024.\",
+  \"OpenAIsArchitecture\" -> \"GPT-2 small: 12-layer post-norm or
+     pre-norm (replications vary), 12 heads, d_model 768, d_ff 3072,
+     vocab 50257, max_seq 1024.\",
+  \"Differences\" -> {
+    \"Our attention uses 12 separate (d_head x d_model) Q/K/V projections;
+     OpenAI's checkpoint stores them as a single (d_model x d_model)
+     matrix.  Mathematically equivalent; the reshape happens at load.\",
+    \"Our output emits per-position logits (seqLen x |V|) for parallel
+     training; the NetModel emits softmax probabilities at the last
+     position only.  Either form is a one-line wrap of the other.\"
+  }|>;
+specSummary\
+\>", "Input",ExpressionUUID->"c30716b3-e144-4987-a43a-60b467811894"],
+
+Cell["9.  Summary and what comes next", "Section",ExpressionUUID->"909dd5e7-2bdc-4825-9ffc-6fd42e41cf6c"],
+
+Cell["\<\
+We finish Part 3 with seven deliverables, each reusable in the remaining \
+parts:\
+\>", "Text",ExpressionUUID->"4d06020b-abd5-4faa-9db8-52a9e81b4538"],
+
+Cell[TextData[{
+ "\[FilledSquare] ",
+ StyleBox["A pre-norm transformer block.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["transformerBlock[dModel, nHeads, dFF, maxSeqLen]",
+  FontFamily->"Courier"],
+ " returns a six-node NetGraph: norm \[Rule] attention \[Rule] add \[Rule] \
+norm \[Rule] FFN \[Rule] add. ",
+ "Pre-norm is the canonical 2020+ choice for stable deep training.\n",
+ "\[FilledSquare] ",
+ StyleBox["A position-wise feed-forward block.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["feedForwardBlock[dModel, dFF, maxSeqLen]",
+  FontFamily->"Courier"],
+ " is the standard ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"75b0cc7b-5f0c-41c7-9d0c-8a87de267310"],
+ " \[Rule] ",
+ Cell[BoxData[
+  SubscriptBox["d", "ff"]], "Text",
+  FontSize->14,ExpressionUUID->"db882012-b97f-4440-ab43-85ea80885657"],
+ " \[Rule] (GELU) \[Rule] ",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"106e42ce-29fe-47fc-8f01-cd9e81fafc7a"],
+ " sandwich, applied per position.\n",
+ "\[FilledSquare] ",
+ StyleBox["A full GPT model constructor.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["gptModel[dModel, nHeads, nLayers, dFF, vocabSize, maxSeqLen]",
+  FontFamily->"Courier"],
+ " returns a NetChain from token IDs to per-position logits, ready to ",
+ "train.\n",
+ "\[FilledSquare] ",
+ StyleBox["A closed-form parameter count.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["parameterCount[spec]",
+  FontFamily->"Courier"],
+ " and ",
+ StyleBox["parameterCountFull[spec]",
+  FontFamily->"Courier"],
+ " agree exactly with the empirical ",
+ StyleBox["Information",
+  FontFamily->"Courier"],
+ " count for all three of our reference model sizes.\n",
+ "\[FilledSquare] ",
+ StyleBox["A model-size ladder.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["modelSpec1M",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["modelSpec5M",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["modelSpec25M",
+  FontFamily->"Courier"],
+ " return ready-to-use specs for the Part 4 training experiments. ",
+ "(Trainable parameter counts: 1.10M, 5.34M, 18.65M.)\n",
+ "\[FilledSquare] ",
+ StyleBox["An interactive size dial.",
+  FontWeight->Bold],
+ " Section 7.1's ",
+ StyleBox["Manipulate",
+  FontFamily->"Courier"],
+ " lets the reader pick any (",
+ Cell[BoxData[
+  SubscriptBox["d", "model"]], "Text",
+  FontSize->14,ExpressionUUID->"487b0dfa-c95d-4a87-b274-aeeb70698b75"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["n", "heads"]], "Text",
+  FontSize->14,ExpressionUUID->"05a28c81-db19-4d1a-b436-14d846e8f042"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["n", "layers"]], "Text",
+  FontSize->14,ExpressionUUID->"be18a641-9599-4fab-9ccd-8aeb77177cc2"],
+ ", ",
+ Cell[BoxData[
+  SubscriptBox["d", "ff"]], "Text",
+  FontSize->14,ExpressionUUID->"f891e2df-b859-4989-ba8f-3860aa2c5595"],
+ ", ",
+ Cell[BoxData[
+  RowBox[{"|", "V", "|"}]], "Text",
+  FontSize->14,ExpressionUUID->"997b4167-3902-495b-8672-49d0364c0d30"],
+ ", maxSeqLen) and see the parameter count, the with-mask ",
+ "count, and the FFN/attention size ratio update in real time.\n",
+ "\[FilledSquare] ",
+ StyleBox["GPT-2 reconstruction.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["gpt2SmallSpec[]",
+  FontFamily->"Courier"],
+ " plugged into our same ",
+ StyleBox["gptModel",
+  FontFamily->"Courier"],
+ " constructor yields a parameter count exact to within 13K of ",
+ "real GPT-2 small (with weight tying). The same constructor at our ",
+ "1M spec gives the toy model Part 4 actually trains.\n",
+ "\[FilledSquare] ",
+ StyleBox["Use-the-prebuilt-or-build-your-own switch.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["loadPrebuiltGpt2[]",
+  FontFamily->"Courier"],
+ " returns the trained NetModel checkpoint for fine-tuning ",
+ "starts; ",
+ StyleBox["buildGpt2Architecture[]",
+  FontFamily->"Courier"],
+ " returns an empty net at the same spec for train-from-scratch ",
+ "tiers."
+}], "Text",ExpressionUUID->"32a092b8-659e-40da-ba4b-1ef69be8ecad"],
+
+Cell[TextData[{
+ "In ",
+ StyleBox["Part 4",
+  FontWeight->Bold],
+ " we train the 1M and 5M models on Tiny Shakespeare with a CPU-only ",
+ "loop running on a Mac mini, plot the loss curve live via ",
+ StyleBox["TrainingProgressFunction",
+  FontFamily->"Courier"],
+ ", and offer the cloud path: submit the 25M model on a FineWeb-Edu ",
+ "slice via ",
+ StyleBox["RemoteBatchSubmit",
+  FontFamily->"Courier"],
+ " for readers with a Wolfram Cloud account. The headline figure is ",
+ "the loss vs FLOPs overlay across all three sizes, recovering a ",
+ "small-scale Chinchilla signature."
+}], "Text",ExpressionUUID->"a67d51ac-6c20-40ec-ace2-7c41ef0ffb6a"],
+
+Cell["References", "Section",ExpressionUUID->"bf5b29b7-7e10-4fc5-be16-471b5fc32f99"],
+
+Cell["\<\
+Vaswani, A. et al. (2017). Attention Is All You Need. NeurIPS.
+Xiong, R. et al. (2020). On Layer Normalization in the Transformer \
+Architecture. ICML.
+Hendrycks, D., Gimpel, K. (2016). Gaussian Error Linear Units (GELUs).
+Hoffmann, J. et al. (2022). Training Compute-Optimal Large Language Models. \
+(Chinchilla.)
+Karpathy, A. (2025). nanochat. github.com/karpathy/nanochat.
+Raschka, S. (2024). Build a Large Language Model from Scratch. Manning.\
+\>", "Text",ExpressionUUID->"3195cd7c-7430-4978-9c5d-9a6e62d690eb"]
+},
+Saveable->True,
+WindowSize->{900, 750},
+FrontEndVersion->"14.3 for Mac OS X ARM (64-bit) (July 8, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"43dd4f8a-090f-457b-b6af-b31b58257ae4"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[554, 20, 153, 2, 70, "Title",ExpressionUUID->"21738e24-66ae-4b62-935c-150201b6275e"],
+Cell[710, 24, 132, 0, 70, "Subtitle",ExpressionUUID->"36413683-bc24-4268-9c57-9e69d3779bd2"],
+Cell[845, 26, 826, 15, 70, "Text",ExpressionUUID->"5496b924-45bc-4d71-bb13-8300a45d1404"],
+Cell[1674, 43, 162, 2, 70, "Input",ExpressionUUID->"c811edea-d24c-42a8-8a7f-dafd09dc79f7"],
+Cell[1839, 47, 83, 0, 70, "Section",ExpressionUUID->"dda8bcd5-3786-49e3-a7e2-a8c10d2d5529"],
+Cell[1925, 49, 290, 4, 70, "Text",ExpressionUUID->"6f75a877-560c-4fea-b314-0e3887835ce5"],
+Cell[2218, 55, 105, 0, 70, "Input",ExpressionUUID->"075d3f83-d4e0-495a-afbf-38a475dff29b"],
+Cell[2326, 57, 144, 2, 70, "Input",ExpressionUUID->"7412ea9c-e001-42f0-86fd-aa161b238ef5"],
+Cell[2473, 61, 126, 0, 70, "Input",ExpressionUUID->"016f8586-e596-4bad-9c79-373862cf29ff"],
+Cell[2602, 63, 99, 0, 70, "Input",ExpressionUUID->"a815c1f7-2b02-4591-ae49-df45ece640e4"],
+Cell[2704, 65, 110, 0, 70, "Section",ExpressionUUID->"783a9bc9-6bb3-4872-9912-ab2fa1a7148f"],
+Cell[2817, 67, 579, 10, 70, "Text",ExpressionUUID->"9378adb6-0eb6-46ae-9ae7-bca40739eeb4"],
+Cell[3399, 79, 1055, 27, 70, "Text",ExpressionUUID->"51b5064b-eddf-42c7-bc1b-657eb8064e8f"],
+Cell[4457, 108, 224, 4, 70, "Input",ExpressionUUID->"c4697f34-0744-448b-8f56-d8914a85ceda"],
+Cell[4684, 114, 115, 0, 70, "Section",ExpressionUUID->"b3f734dc-9110-426d-9a0a-bffaa682d68a"],
+Cell[4802, 116, 123, 0, 70, "Text",ExpressionUUID->"22585606-5b2f-47d2-869e-394c2b241acd"],
+Cell[4928, 118, 148, 3, 70, "Text",ExpressionUUID->"95b2dd0c-5aaa-4c6c-81f0-23fd7bad0070"],
+Cell[5079, 123, 873, 17, 70, "Text",ExpressionUUID->"e0cd46bb-3b09-4ebb-9d35-bc1cef96580c"],
+Cell[5955, 142, 160, 3, 70, "Input",ExpressionUUID->"47a44292-b919-448d-873c-c404e774c936"],
+Cell[6118, 147, 117, 0, 70, "Input",ExpressionUUID->"f3f7db0e-d4c4-42ec-9d1a-96317c7b2f2c"],
+Cell[6238, 149, 99, 0, 70, "Section",ExpressionUUID->"b7021109-9409-4aa1-857b-c487cef5f3ce"],
+Cell[6340, 151, 937, 18, 70, "Text",ExpressionUUID->"37235d8c-2041-42cd-b824-0170ae5e6a63"],
+Cell[7280, 171, 205, 3, 70, "Text",ExpressionUUID->"d2bf375f-3713-4cd5-9850-1263e1a3ebcb"],
+Cell[7488, 176, 122, 0, 70, "Input",ExpressionUUID->"e0a681aa-2405-4e4e-8233-e85030f4a7a2"],
+Cell[7613, 178, 495, 7, 70, "Text",ExpressionUUID->"d4b702ea-6075-4eca-a779-ad7805ba4715"],
+Cell[8111, 187, 96, 0, 70, "Section",ExpressionUUID->"f3b07e16-6c67-4224-a698-7fb38ae6331d"],
+Cell[8210, 189, 676, 16, 70, "Text",ExpressionUUID->"ad540f13-e55c-4c03-8192-81079619b858"],
+Cell[8889, 207, 551, 13, 70, "Text",ExpressionUUID->"03fc1f9c-dcb8-4a39-937a-c54959183148"],
+Cell[9443, 222, 205, 4, 70, "Input",ExpressionUUID->"cc837029-3378-4511-89ae-88a2c45ebbab"],
+Cell[9651, 228, 361, 5, 70, "Text",ExpressionUUID->"89c69c20-6331-4db0-a4b7-11433b86045f"],
+Cell[10015, 235, 97, 0, 70, "Section",ExpressionUUID->"6684cdc1-5f27-426b-b26b-92147dc423ff"],
+Cell[10115, 237, 520, 14, 70, "Text",ExpressionUUID->"e602c55c-e58b-4dd5-9af7-7e82f5a01807"],
+Cell[10638, 253, 1375, 40, 70, "Text",ExpressionUUID->"616ca99a-2c74-4e35-b7a6-2798040723c1"],
+Cell[12016, 295, 1284, 42, 70, "Text",ExpressionUUID->"a6b1a812-ecda-4bd8-8497-db6c171b4c58"],
+Cell[13303, 339, 662, 17, 70, "Text",ExpressionUUID->"0cb3e173-8b13-484a-84e6-2e08feccd5bb"],
+Cell[13968, 358, 467, 10, 70, "Input",ExpressionUUID->"7c83cd4c-d6b1-424e-9d3f-d6bbbac63e3a"],
+Cell[14438, 370, 493, 9, 70, "Text",ExpressionUUID->"cf31394f-f309-44e7-8370-dedf32ad1c4e"],
+Cell[14934, 381, 102, 0, 70, "Text",ExpressionUUID->"3681c4fb-5ea2-4df7-adb6-1a57da012bde"],
+Cell[15039, 383, 112, 0, 70, "Input",ExpressionUUID->"bad01db0-3b57-4045-aa78-a3b883000855"],
+Cell[15154, 385, 609, 8, 70, "Text",ExpressionUUID->"9d9b0106-d12d-4c89-9454-2f5cd592e865"],
+Cell[15766, 395, 100, 0, 70, "Section",ExpressionUUID->"a18f75ac-a266-4161-abc0-e9296845beea"],
+Cell[15869, 397, 314, 5, 70, "Text",ExpressionUUID->"044842a0-3997-4d96-a149-7aded48b3efb"],
+Cell[16186, 404, 594, 14, 70, "Input",ExpressionUUID->"c99f0246-d533-4698-b770-2ed14dfd3a7d"],
+Cell[16783, 420, 114, 0, 70, "Subsection",ExpressionUUID->"6ca5b4a1-7400-4789-9c78-088abafc017d"],
+Cell[16900, 422, 1314, 35, 70, "Text",ExpressionUUID->"a6834959-500f-4451-a65e-887a592558ad"],
+Cell[18217, 459, 1168, 24, 70, "Input",ExpressionUUID->"2928bc93-8f85-4fb2-969a-f361d4241fae"],
+Cell[19388, 485, 118, 0, 70, "Section",ExpressionUUID->"2b666966-9d25-4d70-9055-36f158257fe2"],
+Cell[19509, 487, 427, 8, 70, "Text",ExpressionUUID->"93be9914-16d1-4539-ad9f-746402938ed3"],
+Cell[19939, 497, 128, 3, 70, "Input",ExpressionUUID->"0ba16177-8e50-4694-8c85-1e4cd5ec1549"],
+Cell[20070, 502, 392, 6, 70, "Text",ExpressionUUID->"94b3a934-aa4e-4c4b-baaa-a2b4e9761848"],
+Cell[20465, 510, 190, 3, 70, "Input",ExpressionUUID->"b7949e00-9dc8-4a62-b5ba-957fd2bc5102"],
+Cell[20658, 515, 140, 2, 70, "Text",ExpressionUUID->"583755dd-a10b-4568-abd9-06e129003562"],
+Cell[20801, 519, 870, 20, 70, "Text",ExpressionUUID->"4540761c-d1e5-4410-9664-3f955234ba29"],
+Cell[21674, 541, 436, 12, 70, "Text",ExpressionUUID->"e97e6aae-2c4a-4e63-a7e3-c8c76a51034a"],
+Cell[22113, 555, 263, 6, 70, "Text",ExpressionUUID->"69707f1d-06aa-4a35-8001-89b6ac6daf31"],
+Cell[22379, 563, 990, 18, 70, "Input",ExpressionUUID->"c30716b3-e144-4987-a43a-60b467811894"],
+Cell[23372, 583, 105, 0, 70, "Section",ExpressionUUID->"909dd5e7-2bdc-4825-9ffc-6fd42e41cf6c"],
+Cell[23480, 585, 160, 3, 70, "Text",ExpressionUUID->"4d06020b-abd5-4faa-9db8-52a9e81b4538"],
+Cell[23643, 590, 3875, 116, 70, "Text",ExpressionUUID->"32a092b8-659e-40da-ba4b-1ef69be8ecad"],
+Cell[27521, 708, 648, 15, 70, "Text",ExpressionUUID->"a67d51ac-6c20-40ec-ace2-7c41ef0ffb6a"],
+Cell[28172, 725, 84, 0, 70, "Section",ExpressionUUID->"bf5b29b7-7e10-4fc5-be16-471b5fc32f99"],
+Cell[28259, 727, 526, 9, 70, "Text",ExpressionUUID->"3195cd7c-7430-4978-9c5d-9a6e62d690eb"]
+}
+]
+*)
+
+(* End of internal cache information *)

@@ -1,0 +1,1067 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[     50219,       1058]
+NotebookOptionsPosition[     41451,        954]
+NotebookOutlinePosition[     41808,        970]
+CellTagsIndexPosition[     41765,        967]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell["\<\
+Build a Large Language Model from Scratch \[LongDash] in Wolfram Language\
+\>", "Title",ExpressionUUID->"ca5a21c0-5d94-499a-8303-b62a1d762d9c"],
+
+Cell["Part 1: Tokeniser and embeddings", "Subtitle",ExpressionUUID->"4217fe81-6a09-45cd-ad98-d488fdd8840b"],
+
+Cell[TextData[{
+ "This is the opening post of a eight-part series that builds a small ",
+ "transformer language model entirely in Wolfram Language. Each part is ",
+ "self-contained and runs on a Mac mini with no GPU. The series is a ",
+ "companion-in-spirit to Sebastian Raschka's ",
+ "\[OpenCurlyDoubleQuote]Build a Large Language Model from Scratch\
+\[CloseCurlyDoubleQuote] (Manning, 2024), but every line of code, every ",
+ "derivation, and the whole exposition is original. The intersection with ",
+ "the book is the canonical mathematics of the transformer, which has been ",
+ "the same since 2017, and the use of Tiny Shakespeare as the corpus, ",
+ "which has been a community convention since Karpathy's ",
+ StyleBox["char-rnn",
+  FontSlant->Italic],
+ " (2015)."
+}], "Text",ExpressionUUID->"1f44b107-44b9-4bc7-95ea-fb9a2f199b0e"],
+
+Cell[TextData[{
+ "A language model is, in the end, a function ",
+ Cell[BoxData[
+  RowBox[{
+   SuperscriptBox["\[DoubleStruckCapitalR]", 
+    RowBox[{"n", "\[Times]", "d"}]], 
+   RowBox[{" ", 
+    RowBox[{"\[Rule]", " "}]}], 
+   SuperscriptBox["\[DoubleStruckCapitalR]", 
+    RowBox[{"n", "\[Times]", 
+     RowBox[{"|", "V", "|"}]}]]}]], "Text",
+  FontSize->14,ExpressionUUID->"06804013-96a9-4bb2-9e6c-2ac03c49f95c"],
+ ": a sequence of n continuous vectors of size d goes in, and ",
+ "out comes a sequence of probability distributions over a vocabulary of ",
+ "size |V|. Everything attention papers and GPT pre-prints argue about ",
+ "\[LongDash] attention, normalisation, residuals \[LongDash] sits inside ",
+ "that function. But there are two pieces outside it that decide what the ",
+ "function is allowed to see, and they are the subject of this post: the ",
+ "tokeniser, which decides what \[OpenCurlyDoubleQuote]an input\
+\[CloseCurlyDoubleQuote] is in the first place, and the embedding layer, ",
+ "which lifts the discrete tokens it produces into the continuous space ",
+ "the model operates on."
+}], "Text",ExpressionUUID->"70311af9-3daf-4ceb-a2f6-75fa32b81743"],
+
+Cell["\<\
+The choice of tokeniser fixes two numbers that play against each other for \
+the rest of the series: the vocabulary size |V|, which sets the size of the \
+output softmax and a non-trivial fraction of the model's parameters, and the \
+sequence length n, which controls how much the attention block has to look at \
+at once. Doubling |V| does not exactly halve n, but it shrinks it; the \
+empirical curve of how this trade-off plays out is one of the deliverables of \
+this post.\
+\>", "Text",ExpressionUUID->"ba4c04e0-2519-4cfb-9e58-3fc1159143ec"],
+
+Cell[TextData[{
+ "By the end we will have a ",
+ Cell[BoxData["bpeTokenise"], "Text",
+  FontFamily->"Courier",
+  FontSize->14,ExpressionUUID->"149a7d35-fb12-4d35-b354-4167d7eb34f0"],
+ " function and a ",
+ Cell[BoxData["NetGraph"], "Text",
+  FontFamily->"Courier",
+  FontSize->14,ExpressionUUID->"4b842959-2e72-48ae-b3c1-56ac6f55d95c"],
+ " embedder, both reusable by Parts 2 through 5, and we will have looked ",
+ "at the geometry of token space before any training has happened so we ",
+ "have a baseline for the \
+\[OpenCurlyDoubleQuote]after\[CloseCurlyDoubleQuote] picture in Part 4."
+}], "Text",ExpressionUUID->"d1d85db8-d505-42d5-9f1e-34e9f7394575"],
+
+Cell[BoxData[
+ RowBox[{"Import", "[", "\"\<figures/illustration_pipeline.png\>\"", 
+  "]"}]], "Input",ExpressionUUID->"d84f3537-8c8b-4348-8f89-899923ad0818"],
+
+Cell["1.  Setup", "Section",ExpressionUUID->"386c15fa-dbd2-4040-aa46-2b3ccb5805f2"],
+
+Cell[TextData[{
+ "Load the tokeniser package and the Tiny Shakespeare corpus. Both live ",
+ "alongside the notebook in the repository at ",
+ StyleBox["part-01-tokeniser-and-embeddings/",
+  FontFamily->"Courier"],
+ ". Running the notebook from a fresh kernel \[LongDash] there is no ",
+ "external state to set up, no Python environment to provision, no GPU ",
+ "driver to wrestle with. ",
+ "The corpus is ~1.1 MB of public-domain Shakespeare play text, ",
+ "downloaded the first time the build script runs and cached locally ",
+ "from then on. Tiny Shakespeare has been a community convention since ",
+ "Karpathy's char-rnn; we use it throughout the series so that every ",
+ "result is reproducible from a 1 MB file rather than a multi-gigabyte ",
+ "scrape."
+}], "Text",ExpressionUUID->"5f11b32e-6864-4476-8a6e-af1515478706"],
+
+Cell["SetDirectory[NotebookDirectory[]]", "Input",ExpressionUUID->"bee097a2-1e88-43a0-bdc5-7151dde5dcb1"],
+
+Cell["Get[\"src/Tokeniser.wl\"]", "Input",ExpressionUUID->"93ac0647-0800-4fad-a13b-fcf52c680728"],
+
+Cell["\<\
+text = Import[\"data/tinyshakespeare.txt\", \"Text\"];
+StringLength[text]\
+\>", "Input",ExpressionUUID->"637f4f48-69a8-409a-9c58-5ba60d1ffba5"],
+
+Cell["2.  Three ways to slice a sentence", "Section",ExpressionUUID->"3b3ed1ad-88bc-43cb-ad26-e99892613cff"],
+
+Cell["\<\
+Before we get to byte-pair encoding, the two trivial baselines.  These are \
+useful both because they bracket the design space at its extremes and because \
+each is occasionally the right choice for a specific task.\
+\>", "Text",ExpressionUUID->"8e397b24-642e-4f53-9ef7-0e130c791d95"],
+
+Cell[TextData[{
+ StyleBox["Character-level. ",
+  FontWeight->Bold],
+ "The vocabulary is just the set of characters that appear in the corpus. ",
+ "On Tiny Shakespeare that is 65 characters (uppercase and lowercase ",
+ "letters, digits, punctuation, whitespace, plus a newline). The sequence ",
+ "length is the length of the text in characters, ~1,115,000 for the full ",
+ "corpus. Models in this regime are easy to implement (no tokeniser, just ",
+ "the text), but the sequence is so long that an attention block with ",
+ "n\[ThinSpace]\[Times]\[ThinSpace]n cost has to do quadratically too much ",
+ "work, and long-range dependencies are diluted across a million ",
+ "positions. Character-level was the dominant choice in 2015\[Dash]2017 ",
+ "(the era of char-rnn and ByteNet) and is rarely the right answer today, ",
+ "except as a baseline."
+}], "Text",ExpressionUUID->"aa2db0a0-c60e-4d76-847a-63d4e4a2c9ee"],
+
+Cell[TextData[{
+ StyleBox["Word-level. ",
+  FontWeight->Bold],
+ "The vocabulary is the set of distinct whitespace-separated words; ",
+ "on Tiny Shakespeare that is ~14,500 of them. The sequence length is ",
+ "the number of word occurrences, ~252,000. The numbers are kinder to the ",
+ "attention block, but every rare inflection or proper noun is its own ",
+ "token, so the model sees most of them once or twice during training and ",
+ "cannot generalise. Worse, anything outside the training vocabulary is ",
+ "an out-of-vocabulary token and must be replaced with a fixed ",
+ StyleBox["<UNK>",
+  FontFamily->"Courier"],
+ " marker, losing all information about what the unseen word was."
+}], "Text",ExpressionUUID->"c72eea6a-33d5-43e4-8f24-73207f1ddede"],
+
+Cell["LLMAtoZ`Tokeniser`charBaselineVocabulary[text] // Length", "Input",ExpressionUUID->"0840751b-1caf-48f8-8ef7-b77cc8d1bff4"],
+
+Cell["LLMAtoZ`Tokeniser`wordBaselineVocabulary[text] // Length", "Input",ExpressionUUID->"03a01d0f-1e65-4ed0-a7b5-6e97ef8bbd53"],
+
+Cell[TextData[{
+ "Even the word-level definition needs a little care: do you count ",
+ StyleBox["\"world!\"",
+  FontFamily->"Courier"],
+ " as one token or two? ",
+ "Splitting only on whitespace bundles punctuation into the previous ",
+ "word, ballooning the vocabulary with near-duplicates ",
+ "(\"world\", \"world!\", \"world,\", \"world?\"). The ",
+ StyleBox["preTokenise",
+  FontFamily->"Courier"],
+ " function in the package splits on whitespace and on the boundary ",
+ "between alphabetic and non-alphabetic characters, so that punctuation ",
+ "becomes its own pre-token. This pre-tokenisation step is what BPE ",
+ "actually operates on; the algorithm never merges across a pre-token ",
+ "boundary, which keeps it from inventing tokens like ",
+ StyleBox["\"world!\"",
+  FontFamily->"Courier"],
+ " out of distinct word and punctuation pieces."
+}], "Text",ExpressionUUID->"6bff9f43-3a58-483d-824c-5466195ed90b"],
+
+Cell["LLMAtoZ`Tokeniser`preTokenise[StringTake[text, 80]]", "Input",ExpressionUUID->"5b9635cf-e852-43ae-8d85-498cf4567c21"],
+
+Cell["3.  Byte-pair encoding, from first principles", "Section",ExpressionUUID->"2dd75ab0-7205-4c57-8ead-fc62e3aab6eb"],
+
+Cell["\<\
+Byte-pair encoding (BPE) was originally a compression algorithm proposed by \
+Philip Gage in The C Users Journal (1994).  Its transplant to neural-network \
+text tokenisation is by Sennrich, Haddow and Birch (ACL 2016): the same \
+iterative-merge procedure, but the symbols being merged are characters or \
+sub-word pieces rather than bytes of an arbitrary file. GPT-2 uses a \
+byte-level variant of the same idea (Radford et al., 2019), tiktoken is the \
+production-grade modern reimplementation, and essentially every transformer \
+language model since 2018 ships some flavour of BPE as its front door.\
+\>", "Text",ExpressionUUID->"21f7c931-8023-4735-b638-f98ebffef3de"],
+
+Cell["The algorithm is four lines:", "Text",ExpressionUUID->"2a96a8a2-07c2-4140-99b9-eb84f5e4239e"],
+
+Cell[TextData[{
+ StyleBox["1.",
+  FontWeight->Bold],
+ " Start with the alphabet of base symbols (characters).\n",
+ StyleBox["2.",
+  FontWeight->Bold],
+ " Across the pre-tokenised corpus, count every adjacent pair of symbols.\n",
+ StyleBox["3.",
+  FontWeight->Bold],
+ " Treat the most frequent pair as a new symbol from now on; record the \
+merge.\n",
+ StyleBox["4.",
+  FontWeight->Bold],
+ " Repeat until the merge budget is spent or no pair occurs more than once."
+}], "Text",ExpressionUUID->"afa6828f-3872-4fa5-919f-6952f072ad4d"],
+
+Cell[TextData[{
+ "The vocabulary you end up with contains common short subword pieces ",
+ "\[LongDash] ",
+ StyleBox["th",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["the",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["ing",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["ed",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["Mr",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["ou",
+  FontFamily->"Courier"],
+ " \[LongDash] alongside the original characters.  A pre-token like ",
+ StyleBox["\"speaking\"",
+  FontFamily->"Courier"],
+ " typically tokenises to ",
+ StyleBox["{\"speak\", \"ing</w>\"}",
+  FontFamily->"Courier"],
+ ": the end-of-word marker ",
+ StyleBox["</w>",
+  FontFamily->"Courier"],
+ " always merges left into the final piece, because it is just another ",
+ "symbol from the algorithm's point of view. A rare proper noun like ",
+ StyleBox["\"Coriolanus\"",
+  FontFamily->"Courier"],
+ " falls all the way back to characters in the worst case \[LongDash] ",
+ StyleBox["{\"C\", \"or\", \"io\", \"lan\", \"us</w>\"}",
+  FontFamily->"Courier"],
+ ". The property that no input is ever out-of-vocabulary is the deep ",
+ "reason BPE has stuck around in 2026 long after the language model on ",
+ "top of it has been redesigned half a dozen times."
+}], "Text",ExpressionUUID->"4d1a3425-d3d4-4b28-b229-c2164fde1dfa"],
+
+Cell[BoxData[
+ RowBox[{"Import", "[", "\"\<figures/illustration_bpe_merge.png\>\"", 
+  "]"}]], "Input",ExpressionUUID->"6d3f82bb-ae7a-4054-b92e-a75efe243631"],
+
+Cell["3.1  The merge loop in Wolfram Language", "Subsection",ExpressionUUID->"635e3341-ccee-4843-968d-0f0384f686ce"],
+
+Cell[TextData[{
+ "We represent each pre-token's frequency once and never duplicate work.  ",
+ "The state of the algorithm is a list of ",
+ StyleBox["{symbolList, frequency}",
+  FontFamily->"Courier"],
+ " pairs, one entry per unique pre-token. Whitespace is dropped at ",
+ "pre-tokenisation time; the end-of-word marker carries the word ",
+ "boundary forward through the merges."
+}], "Text",ExpressionUUID->"a6e2a6e3-56b6-423e-b153-45a7054df187"],
+
+Cell["\<\
+Three Wolfram Language idioms make this concise, and worth pausing on because \
+they replace what is several pages of bookkeeping in Python:\
+\>", "Text",ExpressionUUID->"78ff2619-a6e8-4c1b-ac30-c0be8f966d40"],
+
+Cell[TextData[{
+ "\[FilledCircle] ",
+ StyleBox["Counts[preTokenise[text]]",
+  FontFamily->"Courier"],
+ " gives the pre-token frequency map as a one-liner. There is no ",
+ StyleBox["defaultdict(int)",
+  FontFamily->"Courier"],
+ " loop.\n",
+ "\[FilledCircle] ",
+ StyleBox["Merge[..., Total]",
+  FontFamily->"Courier"],
+ " is the right hammer for \[OpenCurlyDoubleQuote]many key\[Rule]value pairs \
+with duplicate keys; ",
+ "sum the values\[CloseCurlyDoubleQuote]. The keys can be arbitrary \
+expressions including a ",
+ "two-element list like ",
+ StyleBox["{\"t\", \"h\"}",
+  FontFamily->"Courier"],
+ ", so the pair-frequency map needs no encoding tricks.\n",
+ "\[FilledCircle] ",
+ StyleBox["SequenceReplace[syms, {a, b} -> a <> b]",
+  FontFamily->"Courier"],
+ " does the in-place pair merge inside a symbol list. No two-pointer ",
+ "loop, no off-by-one. ",
+ "The result is a tokeniser fewer than 200 lines long, including ",
+ "package boilerplate and usage messages, that trains 1000 merges on ",
+ "Tiny Shakespeare in under 8 seconds on a 2023 Mac mini."
+}], "Text",ExpressionUUID->"46348279-cc90-40d0-bbdb-a9bff3aab9dd"],
+
+Cell["\<\
+trained = LLMAtoZ`Tokeniser`trainBPE[text, 1000]; // AbsoluteTiming\
+\>", "Input",ExpressionUUID->"3d725780-0c82-43de-9567-0afd7c7c69d5"],
+
+Cell["Take[trained[\"MergeRules\"], 20]", "Input",ExpressionUUID->"4783721c-77ce-41b8-b0ae-7dcd5f7062e4"],
+
+Cell[TextData[{
+ "The very first merge is ",
+ StyleBox["{\"e\", \"</w>\"} \[Rule] \"e</w>\"",
+  FontFamily->"Courier"],
+ " \[LongDash] words ending in -e are the most common compressible ",
+ "pattern in English. The second is ",
+ StyleBox["{\"t\", \"h\"} \[Rule] \"th\"",
+  FontFamily->"Courier"],
+ ", which then combines with ",
+ StyleBox["e</w>",
+  FontFamily->"Courier"],
+ " a few merges later to form ",
+ StyleBox["the</w>",
+  FontFamily->"Courier"],
+ " \[LongDash] the most frequent word in the corpus, learned in three ",
+ "merges. This kind of order-of-discovery is what you would hope a ",
+ "compression algorithm trained on English would produce, and is a useful ",
+ "sanity check that the implementation is doing what it claims."
+}], "Text",ExpressionUUID->"3000150d-64a2-467a-b6ac-b22c5f5ff795"],
+
+Cell[TextData[{
+ "An implementation detail worth flagging: the production-grade form ",
+ "(implemented in the accompanying ",
+ StyleBox["Tokeniser.wl",
+  FontFamily->"Courier"],
+ ") maintains the pair-count table incrementally rather than rebuilding ",
+ "it after each merge \[LongDash] only the pre-tokens that actually ",
+ "contained the merged pair get revisited. The naive ",
+ "rebuild-from-scratch version is conceptually identical and is what the ",
+ "snippet above describes; the incremental version is what makes 4000 ",
+ "merges on 1 MB of text finish in ~12 seconds rather than ~30 minutes."
+}], "Text",ExpressionUUID->"c65e41fc-3a94-45d4-a8f4-3eddcc91575c"],
+
+Cell["3.2  Encoding new text", "Subsection",ExpressionUUID->"45711a13-7d10-4b20-bf0e-70fa2a5bfe50"],
+
+Cell[TextData[{
+ "Once the merge rules are learned, tokenising new text is just applying ",
+ "them in order to each pre-token. A subtlety: the merge order matters. ",
+ "If we have learned ",
+ StyleBox["t+h\[Rule]th",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["th+e</w>\[Rule]the</w>",
+  FontFamily->"Courier"],
+ ", and ",
+ StyleBox["e+r\[Rule]er",
+  FontFamily->"Courier"],
+ ", then encoding ",
+ StyleBox["\"there\"",
+  FontFamily->"Courier"],
+ " applies the merges in ",
+ "the order they were learned: first ",
+ StyleBox["{t,h,e,r,e,</w>}\[Rule]{th,e,r,e,</w>}",
+  FontFamily->"Courier"],
+ ", and only then ",
+ StyleBox["{th,e,r,e,</w>}\[Rule]{th,er,e,</w>}",
+  FontFamily->"Courier"],
+ ". This is one of the places where BPE differs from a flat lookup ",
+ "table \[LongDash] the encoding is path-dependent."
+}], "Text",ExpressionUUID->"dea5a866-f983-471c-96aa-257c9d0a53a5"],
+
+Cell["\<\
+mergeRules = trained[\"MergeRules\"];
+LLMAtoZ`Tokeniser`bpeEncode[\"To be or not to be, that is the question.\", \
+mergeRules]\
+\>", "Input",ExpressionUUID->"7f4a4c44-512c-4770-9a2b-60eee260845b"],
+
+Cell[TextData[{
+ "Common short words (",
+ StyleBox["To",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["be",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["or",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["the",
+  FontFamily->"Courier"],
+ ") compress to a single token each; the less-common ",
+ StyleBox["\"question\"",
+  FontFamily->"Courier"],
+ " decomposes into three sub-word pieces ",
+ StyleBox["{qu, es, tion</w>}",
+  FontFamily->"Courier"],
+ ". A rarer proper noun like ",
+ StyleBox["\"Coriolanus\"",
+  FontFamily->"Courier"],
+ " would decompose further. Crucially, every input \[LongDash] including ",
+ "out-of-corpus or non-English characters \[LongDash] is representable, ",
+ "because the base alphabet of single characters always sits at the ",
+ "bottom of the merge tree. No ",
+ StyleBox["<UNK>",
+  FontFamily->"Courier"],
+ ", ever."
+}], "Text",ExpressionUUID->"06fdfae9-ab10-486e-92de-611302a53895"],
+
+Cell["3.3  See the tokens", "Subsection",ExpressionUUID->"83e32732-e252-4700-8c8a-6ac82f2f387b"],
+
+Cell[TextData[{
+ "The clearest way to convey what BPE has done is to look at the actual ",
+ "tokens. Each coloured box below is one BPE token; the small black ",
+ "square at the end of a box marks the end-of-word boundary ",
+ "(the ",
+ StyleBox["</w>",
+  FontFamily->"Courier"],
+ " marker). Identical tokens get identical colours, so repeated short ",
+ "words are easy to spot."
+}], "Text",ExpressionUUID->"b9cd872a-8d1a-4266-a8ef-03eaeee90c17"],
+
+Cell["\<\
+LLMAtoZ`Tokeniser`colouredTokens[
+  \"To be or not to be, that is the question.\", mergeRules]\
+\>", "Input",ExpressionUUID->"d6d559d1-c298-44d9-aa7d-0dfe5a4f45d8"],
+
+Cell["\<\
+Drag the slider below to change the merge count and see the same passage \
+retokenised on the fly. At 0 merges, every box is a single character; at 50, \
+common bigrams collapse; at the maximum, several whole words fit in a single \
+box.\
+\>", "Text",ExpressionUUID->"6c0b93f8-93c5-45ff-9a9e-75af50555a7c"],
+
+Cell["\<\
+Manipulate[
+  LLMAtoZ`Tokeniser`colouredTokens[
+    \"To be or not to be, that is the question.\",
+    Take[mergeRules, n]],
+  {{n, 500, \"merge rules used\"}, 0, Length[mergeRules], 50, Appearance -> \
+\"Labeled\"},
+  ControlPlacement -> Top, FrameMargins -> 0]\
+\>", "Input",ExpressionUUID->"e7249e05-0c71-4819-b3d7-e50d9772f62e"],
+
+Cell["\<\
+And the same idea on a single word, animated so you can watch BPE build the \
+long-token form out of characters one merge at a time:\
+\>", "Text",ExpressionUUID->"11a853a2-9595-4a8b-aa24-e9c09336cc20"],
+
+Cell["\<\
+With[{prog = LLMAtoZ`Tokeniser`mergeProgression[
+    \"speaking\", Take[mergeRules, 500]]},
+  Animate[
+    Framed[
+      Style[Row[Riffle[prog[[step]], \"  \"]], 18, FontFamily -> \
+\"Courier\"],
+      FrameMargins -> 12],
+    {{step, 1, \"merges applied\"}, 1, Length[prog], 1, Appearance -> \
+\"Labeled\"},
+    AnimationRate -> 1.5,
+    ControlPlacement -> Top]
+]\
+\>", "Input",ExpressionUUID->"e40745f1-f080-4d91-a1e2-9e95d029434d"],
+
+Cell[TextData[{
+ "What you should see (depending on how many merges have been learned): ",
+ StyleBox["{s, p, e, a, k, i, n, g, </w>}",
+  FontFamily->"Courier"],
+ " gradually collapsing into something like ",
+ StyleBox["{speak, ing</w>}",
+  FontFamily->"Courier"],
+ " after enough merges. The end-of-word marker survives all the way ",
+ "through; the model needs that signal to know where one word ends and ",
+ "the next begins."
+}], "Text",ExpressionUUID->"db03485c-cf7f-4826-aaad-4c4ae9683d3c"],
+
+Cell["3.4  The Zipf shape of token frequency", "Subsection",ExpressionUUID->"5e5672ae-2a44-409d-b559-5bc4d70bff01"],
+
+Cell[TextData[{
+ "How often does each BPE token appear in Tiny Shakespeare? The answer ",
+ "is the empirical Zipf curve \[LongDash] on a log-log plot, an ",
+ "almost-straight line. The most frequent token (typically ",
+ StyleBox["the</w>",
+  FontFamily->"Courier"],
+ " or ",
+ StyleBox["</w>",
+  FontFamily->"Courier"],
+ " of some closed-class word) is dramatically more common than the ",
+ "10th, which is dramatically more common than the 100th, and so on. ",
+ "This is the structure BPE is exploiting: a tiny number of tokens ",
+ "account for most of the corpus."
+}], "Text",ExpressionUUID->"47aafd2e-14a6-44df-9194-a1e98dfc2cf3"],
+
+Cell["\<\
+allTokens = LLMAtoZ`Tokeniser`bpeEncode[text, mergeRules];
+zipf = LLMAtoZ`Tokeniser`tokenZipf[allTokens];
+ListLogLogPlot[zipf,
+  Frame -> True,
+  FrameLabel -> {\"rank\", \"frequency\"},
+  PlotLabel -> \"Token-frequency Zipf curve on Tiny Shakespeare\",
+  PlotStyle -> Directive[PointSize[0.003], ColorData[97][1]],
+  ImageSize -> 500,
+  GridLines -> Automatic
+]\
+\>", "Input",ExpressionUUID->"e051f015-fc03-4481-9383-b3d512e67aac"],
+
+Cell["\<\
+If we fit a line to the log-log curve, the slope is the negative Zipf \
+exponent. Values close to 1 are the canonical \"natural language\" regime. We \
+will use that empirical fact later when we talk about why language models \
+work at all: small models cannot afford to remember every token in their \
+training data, but they can afford to remember the head of the distribution \
+well \[LongDash] and the head is most of the probability mass.\
+\>", "Text",ExpressionUUID->"4ed207d3-fd63-4e92-90b5-f0e84b39125a"],
+
+Cell["\<\
+How big to make the vocabulary is the only real hyperparameter of the \
+tokeniser. GPT-2 uses 50,257 tokens; GPT-4 uses 100,256. For a Tiny \
+Shakespeare-scale model, 1,000 to 5,000 is plenty \[LongDash] the trade-off \
+curve in the next section is how we choose.\
+\>", "Text",ExpressionUUID->"56deda22-b8ed-4d7a-95d5-38713592f2c4"],
+
+Cell["4.  The vocab\[Hyphen]sequence trade-off", "Section",ExpressionUUID->"e219e7c2-e96e-4387-bce0-5d17bd9c2ed8"],
+
+Cell[TextData[{
+ "Train BPE with progressively more merges and watch what happens. At ",
+ "zero merges, the BPE-tokenised corpus is one symbol per pre-token ",
+ "character plus a single ",
+ StyleBox["</w>",
+  FontFamily->"Courier"],
+ " marker per pre-token \[LongDash] ",
+ StyleBox["not",
+  FontSlant->Italic],
+ " the raw corpus character count, because pre-tokenisation drops ",
+ "whitespace before BPE ever sees it. The arithmetic is chars-in-pretokens ",
+ "+ n-pretokens = 905,502 + 251,610 = 1,157,112 tokens at 0 merges, with ",
+ "a vocabulary of 64 (the alphabet that actually appears inside ",
+ "pre-tokens). Every additional merge grows the vocabulary by one and ",
+ "shrinks the sequence by as many positions as it eliminates pair ",
+ "occurrences. The shape of the resulting curve is the empirical ",
+ "justification for preferring sub-word tokenisation to either extreme."
+}], "Text",ExpressionUUID->"22b55a68-2d08-442d-9e01-7a0e18f5c313"],
+
+Cell["Import[\"figures/vocab_vs_seqlen.png\"]", "Input",ExpressionUUID->"a59fc121-9cf5-4392-a2d9-d96338a5fe23"],
+
+Cell["\<\
+The numerical picture: 50 merges already cuts the sequence to 769 k tokens \
+\[LongDash] a third shorter than the character baseline for the price of 50 \
+extra vocabulary entries. 500 merges gets us to 465 k, below half. 4000 \
+merges gets us to 299 k, still six times shorter than character-level. The \
+curve flattens because later merges chase increasingly rare bigrams \
+\[LongDash] the marginal vocabulary entry gives less and less sequence-length \
+reduction. The two extreme baselines sit at the corners: character-level is \
+the cheap-vocabulary, expensive-sequence corner; word-level is the \
+cheap-sequence, expensive-vocabulary corner. A practical model picks an \
+interior point; Part 4 uses 1000 merges and a vocabulary of 1064.\
+\>", "Text",ExpressionUUID->"37f04b72-51d5-4b79-8b99-e5ff96931e06"],
+
+Cell["\<\
+The information-theoretic shape of this curve is not accidental. As long as \
+the corpus has Zipfian word-frequency structure (which English does, and \
+which Shakespeare does in particular), the n-th most frequent bigram has \
+roughly 1/n the count of the most frequent one, so the marginal compression \
+from the n-th merge falls as 1/n. Integrating, total compression grows as \
+log(n) \[LongDash] which on a log-log plot like the one above appears as the \
+curve's gentle drift downward toward the word-level corner.\
+\>", "Text",ExpressionUUID->"ad24717d-901c-4b3e-91da-57cf84f4760e"],
+
+Cell["5.  From tokens to tensors", "Section",ExpressionUUID->"605fac3a-b223-46a2-a3f7-ecc23ac46436"],
+
+Cell["\<\
+A transformer does not see token IDs; it sees vectors. Once we have a list of \
+integer token IDs, we feed them through two embedding tables in parallel:\
+\>", "Text",ExpressionUUID->"c5a9705d-1aae-4c38-992d-ad0bc07ab326"],
+
+Cell[TextData[{
+ "\[FilledSmallCircle] ",
+ StyleBox["Token embedding ",
+  FontWeight->Bold],
+ Cell[BoxData[
+  SubscriptBox["E", "tok"]], "Text",
+  FontSize->14,ExpressionUUID->"e49d2e09-4bdb-4dfd-8436-795830391a50"],
+ " \[Element] ",
+ Cell[BoxData[
+  SuperscriptBox["\[DoubleStruckCapitalR]", 
+   RowBox[{
+    RowBox[{"|", "V", "|"}], "\[Times]", "d"}]]], "Text",
+  FontSize->14,ExpressionUUID->"c3c4d6fc-1ca4-41de-95e6-a63d430fccbc"],
+ ": row i is the vector for token-ID i. Learnable.\n",
+ "\[FilledSmallCircle] ",
+ StyleBox["Positional embedding ",
+  FontWeight->Bold],
+ Cell[BoxData[
+  SubscriptBox["E", "pos"]], "Text",
+  FontSize->14,ExpressionUUID->"7870414e-53ef-4c51-9cf1-021567961d6f"],
+ " \[Element] ",
+ Cell[BoxData[
+  SuperscriptBox["\[DoubleStruckCapitalR]", 
+   RowBox[{
+    SubscriptBox["n", "max"], "\[Times]", "d"}]]], "Text",
+  FontSize->14,ExpressionUUID->"cfe136fc-acbe-4cf3-b0d0-dcf53a971f4e"],
+ ": row j is the vector for the j-th position. Also learnable."
+}], "Text",ExpressionUUID->"e5cd5d6f-63f8-457f-b829-533995472802"],
+
+Cell[TextData[{
+ "The model input is the elementwise sum ",
+ Cell[BoxData[
+  RowBox[{
+   SubscriptBox["E", "tok"], "[", "ids", "]", 
+   RowBox[{" ", 
+    RowBox[{"+", " "}]}], 
+   SubscriptBox["E", "pos"], "[", "positions", "]"}]], "Text",
+  FontSize->14,ExpressionUUID->"f5b678c2-1983-4c59-969f-9d0606939e03"],
+ ". That sum is what flows into the first transformer block. ",
+ "Why a sum rather than a concatenation? Two reasons. ",
+ "First, with the dimensions kept aligned the transformer needs no extra ",
+ "parameters to combine them; concatenation would double the input ",
+ "dimension and require the next layer to be wider. ",
+ "Second, the sum is what falls out naturally if you ask ",
+ "\[OpenCurlyDoubleQuote]what is the right basis-free way to combine two \
+pieces of information that live in the same vector space\
+\[CloseCurlyDoubleQuote] \[LongDash] ",
+ "either is just a vector, and their sum is a vector. The model is free ",
+ "to learn token- and position-information directions that are nearly ",
+ "orthogonal, which is what trained transformers tend to do in practice."
+}], "Text",ExpressionUUID->"5bb28e7a-51ed-4e30-99cf-058f2bf33673"],
+
+Cell[TextData[{
+ "Notice that we picked learned positional embeddings here, not the ",
+ "sinusoidal ones from Vaswani et al. 2017 and not rotary positional ",
+ "embeddings (RoPE, Su et al. 2021). Learned absolute is the simplest ",
+ "choice and is what GPT-2 used. We will revisit this in Part 3 or 5: ",
+ "learned positions cannot generalise beyond ",
+ Cell[BoxData[
+  SubscriptBox["n", "max"]], "Text",
+  FontSize->14,ExpressionUUID->"09b908ae-0871-4470-ac7a-a50813d190ef"],
+ ", whereas RoPE can; for Tiny Shakespeare at 256-token sequences, the ",
+ "limitation does not bite."
+}], "Text",ExpressionUUID->"fd714c9d-b695-4b19-aa38-78bf31644bba"],
+
+Cell["In Wolfram Language this is a three-node NetGraph:", "Text",ExpressionUUID->"d36b0c96-0d2e-4e5b-b3d5-709f727cd75e"],
+
+Cell["\<\
+vocab = LLMAtoZ`Tokeniser`buildBPEVocabulary[trained];
+tokId = LLMAtoZ`Tokeniser`tokenToIdAssociation[vocab];
+embedder = LLMAtoZ`Tokeniser`tokenPositionEmbedder[Length[vocab], 64, 256,
+  RandomSeeding -> 42];\
+\>", "Input",ExpressionUUID->"2ead320a-698b-4df0-978d-10b8687dc48e"],
+
+Cell["embedder", "Input",ExpressionUUID->"e765edda-89b9-4de4-a00e-87aa0e6d1b5a"],
+
+Cell[TextData[{
+ StyleBox["NetInitialize",
+  FontFamily->"Courier"],
+ " populates the two embedding matrices with small Gaussian-distributed ",
+ "random values. Until we train (Part 4), this is what the model sees: a ",
+ "lookup of random vectors. ",
+ "Pass a sequence of token IDs and a parallel sequence of position IDs, ",
+ "and the network returns the (seqLen, dModel) input tensor:"
+}], "Text",ExpressionUUID->"46a5ff74-5d6d-4d6c-b6ac-f60654d360b7"],
+
+Cell["\<\
+ids = LLMAtoZ`Tokeniser`encodeWithIds[
+  \"To be or not to be, that is the question.\", mergeRules, tokId];
+ids\
+\>", "Input",ExpressionUUID->"2ba26650-4674-4d0e-b820-36ed57085c9f"],
+
+Cell["LLMAtoZ`Tokeniser`embedTokens[embedder, ids] // Dimensions", "Input",ExpressionUUID->"da40ba52-c1d8-44f8-b859-3f3ca6361a86"],
+
+Cell[TextData[{
+ "Twelve tokens in, a ",
+ Cell[BoxData[
+  RowBox[{"12", "\[Times]", "64"}]], "Text",
+  FontSize->14,ExpressionUUID->"bfeb97f1-32a8-49ec-b614-c5340dce0b85"],
+ " tensor out. That tensor is exactly what Part 2 will take as input to ",
+ "the attention block."
+}], "Text",ExpressionUUID->"9f0e3c01-d78a-41fc-b311-908a61918d04"],
+
+Cell["5.1  Positional embeddings, as a picture", "Subsection",ExpressionUUID->"30f934c2-168e-4741-9dba-0555c7aa2ed1"],
+
+Cell[BoxData[
+ RowBox[{"Import", "[", "\"\<figures/illustration_pos_encoding.png\>\"", 
+  "]"}]], "Input",ExpressionUUID->"bc467fd0-949d-474d-9647-ac914bd9051c"],
+
+Cell["\<\
+We can look at the positional-embedding matrix directly. Each row is the \
+vector that the model adds to any token sitting at that position. Right now \
+those vectors are random, but the structure of the matrix (256 rows of length \
+64) is exactly the shape of the learned positional embedder at the end of \
+Part 4. The heatmap below shows the first 32 positions; after training, \
+similar positions will have similar rows (because positions 5 and 6 do \
+similar work in a sentence).\
+\>", "Text",ExpressionUUID->"30a5e3c5-14fa-4493-b0f6-330e71a6f52a"],
+
+Cell["\<\
+ArrayPlot[
+  Normal[NetExtract[embedder, {\"positionEmbed\", \"Weights\"}]][[;; 32]],
+  ColorFunction -> \"RedBlueTones\",
+  FrameTicks -> {Range[32], None},
+  ImageSize -> 600,
+  PlotLabel -> \"Positional-embedding matrix, first 32 positions \[Times] 64 \
+dims\"]\
+\>", "Input",ExpressionUUID->"a93f1ab5-69e0-4455-aedb-4d7e4ef89480"],
+
+Cell["6.  Geometry before training", "Section",ExpressionUUID->"ed04eb1f-2ba2-483d-bd70-4045402156ad"],
+
+Cell[TextData[{
+ "We have built a ",
+ StyleBox["NetGraph",
+  FontFamily->"Courier"],
+ " whose token-embedding row for ",
+ StyleBox["\"the\"",
+  FontFamily->"Courier"],
+ " is currently a vector of 64 Gaussian samples. Whatever similarity ",
+ "structure the trained model will eventually have \[LongDash] ",
+ "King near Queen, thee near thou, punctuation off in its own corner ",
+ "\[LongDash] is not in there yet. It is useful to see this with our own ",
+ "eyes so that we have a \
+\[OpenCurlyDoubleQuote]before\[CloseCurlyDoubleQuote] ",
+ "picture to compare against in Part 4. The figure below is the ",
+ "conceptual prediction; the next two are the empirical version of it ",
+ "on this very embedder."
+}], "Text",ExpressionUUID->"82fe53a3-65fa-4233-8f2d-7da81bee41a3"],
+
+Cell[BoxData[
+ RowBox[{"Import", "[", "\"\<figures/illustration_embedding_compare.png\>\"", 
+  "]"}]], "Input",ExpressionUUID->"13227e15-7df6-47bc-aca9-ee4706c32dc3"],
+
+Cell["\<\
+On the left, at random initialisation, the labelled tokens are spread across \
+the cloud at random; there is no semantic structure because the embedding \
+matrix is just Gaussian noise. On the right, after the training of Part 4, \
+words of similar grammatical role and meaning cluster: articles cluster with \
+articles, pronouns with pronouns, punctuation off by itself.\
+\>", "Text",ExpressionUUID->"5b144fb0-6422-48b2-a35c-f67b97bfb358"],
+
+Cell["\<\
+Now the empirical version on the actual embedder we just built:\
+\>", "Text",ExpressionUUID->"2c91af27-782c-498e-ab22-ed4c8ac8889b"],
+
+Cell["Import[\"figures/embedding_geometry_random.png\"]", "Input",ExpressionUUID->"c8227c39-6dee-4e5d-bf96-fd04a6053fde"],
+
+Cell[TextData[{
+ "The diagonal is dark (cosine similarity = 1; each token is identical ",
+ "to itself), and the off-diagonal entries are uniform noise centred ",
+ "near zero. There is a clean prediction here we can check: the ",
+ "standard deviation of the cosine similarity between two independent ",
+ "random unit vectors in d dimensions is ",
+ Cell[BoxData[
+  FractionBox["1", 
+   SqrtBox["d"]]], "Text",
+  FontSize->14,ExpressionUUID->"c2340bd6-53b6-4519-a359-dba9531f4a2a"],
+ ", which for d = 64 gives 0.125. Eyeballing the colour bar, the bulk ",
+ "of the off-diagonal entries sit in [\[Minus]0.2, 0.2] \[LongDash] ",
+ "consistent with that prediction. No two tokens are systematically ",
+ "closer than any other pair, which is exactly the structurelessness ",
+ "we expect."
+}], "Text",ExpressionUUID->"552ce238-0d66-4599-8d3e-074a03b42f9b"],
+
+Cell["Import[\"figures/embedding_pca_random.png\"]", "Input",ExpressionUUID->"32466c99-2d61-493a-8f86-f4d9a4d6f7a7"],
+
+Cell["\<\
+A 2D PCA projection makes the same point visually: a Gaussian blob with the \
+eight highlighted high-frequency tokens scattered all over it. This is the \
+picture we will revisit in Part 4 after training: the same plot will then \
+show clear clusters, with grammatical and semantic structure visible at a \
+glance. Until then, the model knows nothing.\
+\>", "Text",ExpressionUUID->"ac387b32-5275-417a-810e-bfd2c5bb2029"],
+
+Cell["6.1  Interactive: pick any two tokens", "Subsection",ExpressionUUID->"6a325a64-fde1-43be-afd0-51b8481d7b16"],
+
+Cell["\<\
+Pick two tokens from the vocabulary and look at the cosine similarity of \
+their (random-init) embedding vectors. Move the sliders. Most pairs will sit \
+near zero; the diagonal (a token compared with itself) is exactly one. After \
+training in Part 4 you can run the same widget and the off-diagonal entries \
+will no longer be random.\
+\>", "Text",ExpressionUUID->"8fe559f9-4a74-4673-927c-3d30bb0d2471"],
+
+Cell["\<\
+With[{
+    tw = Normal[NetExtract[embedder, {\"tokenEmbed\", \"Weights\"}]],
+    candidateTokens =
+      Take[ReverseSort[Counts[LLMAtoZ`Tokeniser`bpeEncode[
+        StringTake[text, 5000], mergeRules]]], UpTo[40]] // Keys,
+    cosSim = Function[{a, b}, (a.b) / (Norm[a] Norm[b])]},
+  Manipulate[
+    With[{a = Lookup[tokId, t1], b = Lookup[tokId, t2]},
+      Column[{
+        Style[\"cosine similarity:\", 12, Gray],
+        Style[NumberForm[cosSim[tw[[a]], tw[[b]]], 4], 22, Bold,
+              If[Abs[cosSim[tw[[a]], tw[[b]]]] > 0.3, Red, Black]],
+        Spacer[12],
+        ListPlot[{tw[[a]], tw[[b]]},
+          PlotStyle -> {ColorData[97][1], ColorData[97][2]},
+          PlotLegends -> {t1, t2}, Joined -> True,
+          ImageSize -> 460, PlotLabel -> \"the two embedding vectors\"]
+      }]],
+    {{t1, First[candidateTokens], \"token 1\"}, candidateTokens},
+    {{t2, candidateTokens[[2]], \"token 2\"}, candidateTokens},
+    ControlPlacement -> Top]
+  ]\
+\>", "Input",ExpressionUUID->"3566c031-f675-461d-a0c8-998a9d2d167f"],
+
+Cell["7.  Summary and what comes next", "Section",ExpressionUUID->"ca6a06be-a96c-40d4-880b-bea28cd298c7"],
+
+Cell["\<\
+We finish Part 1 with the following deliverables, each reusable in the parts \
+that follow:\
+\>", "Text",ExpressionUUID->"651f17a4-974c-409d-8a77-ca5af6c95514"],
+
+Cell[TextData[{
+ "\[FilledSquare] ",
+ StyleBox["A from-scratch BPE tokeniser.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["trainBPE",
+  FontFamily->"Courier"],
+ " on the full 1.1 MB Tiny Shakespeare corpus finishes in ~12 s for ",
+ "4000 merges thanks to incremental pair-count maintenance, and ",
+ "produces a vocabulary of size ",
+ Cell[BoxData[
+  RowBox[{
+   RowBox[{"64", " ", "+", " "}], "n", 
+   SubscriptBox["", "merges"]}]], "Text",
+  FontSize->14,ExpressionUUID->"3ca6a9ae-8701-4766-adc4-c73e9fe5a10c"],
+ ". ",
+ StyleBox["bpeEncode",
+  FontFamily->"Courier"],
+ ", ",
+ StyleBox["bpeDecode",
+  FontFamily->"Courier"],
+ ", and the integer-ID encode/decode pair are all exported from the ",
+ "package.\n",
+ "\[FilledSquare] ",
+ StyleBox["An empirical vocabulary\[Hyphen]sequence trade-off curve.",
+  FontWeight->Bold],
+ " The log-log plot in section 4 justifies the BPE choice with eight ",
+ "concrete (vocab, seqLen) points spanning the character and word-level ",
+ "extremes, and an information-theoretic ",
+ StyleBox["log(n)",
+  FontFamily->"Courier"],
+ " explanation of its shape on Zipfian text.\n",
+ "\[FilledSquare] ",
+ StyleBox["A live tokenisation widget.",
+  FontWeight->Bold],
+ " Section 3.3's ",
+ StyleBox["Manipulate",
+  FontFamily->"Courier"],
+ " slider retokenises a fixed passage at every merge count from 0 to ",
+ "4000, with identical tokens rendered in identical colours so the ",
+ "reader can watch shorter pieces fuse into single tokens as the ",
+ "vocabulary grows. The accompanying ",
+ StyleBox["Animate",
+  FontFamily->"Courier"],
+ " of ",
+ StyleBox["mergeProgression[\"speaking\", ...]",
+  FontFamily->"Courier"],
+ " plays the same idea on a single word, one merge at a time.\n",
+ "\[FilledSquare] ",
+ StyleBox["A Zipfian token-frequency curve.",
+  FontWeight->Bold],
+ " The empirical rank/frequency log-log plot shows the head-heavy ",
+ "distribution that justifies why a 1000-token vocabulary captures most ",
+ "of the corpus mass.\n",
+ "\[FilledSquare] ",
+ StyleBox["A three-node embedder NetGraph.",
+  FontWeight->Bold],
+ " ",
+ StyleBox["tokenPositionEmbedder[vocabSize, dModel, maxSeqLen]",
+  FontFamily->"Courier"],
+ " combines a learnable token-embedding lookup with a learnable ",
+ "positional embedding by elementwise sum, producing the ",
+ Cell[BoxData[
+  RowBox[{
+   RowBox[{"(", "seqLen"}], "\[Times]", 
+   SubscriptBox["d", "model"], ")"}]], "Text",
+  FontSize->14,ExpressionUUID->"3daffd33-b3fd-4887-a191-68619c33f66e"],
+ " tensor a transformer block expects.\n",
+ "\[FilledSquare] ",
+ StyleBox["A baseline picture of token-space geometry at random ",
+  FontWeight->Bold],
+ StyleBox["initialisation.",
+  FontWeight->Bold],
+ " Cosine-similarity heatmap + PCA(2) scatter + a ",
+ StyleBox["Manipulate",
+  FontFamily->"Courier"],
+ " widget letting the reader pick any two of the 40 most-frequent ",
+ "tokens and inspect their similarity. Right now the geometry is ",
+ "structureless noise \[LongDash] the standard deviation of pairwise ",
+ "cosine similarity matches the theoretical ",
+ Cell[BoxData[
+  FractionBox["1", 
+   SqrtBox["d"]]], "Text",
+  FontSize->14,ExpressionUUID->"fc71e65c-b462-43f1-b0db-71b7074f5707"],
+ " prediction. Part 4 will revisit this plot after training."
+}], "Text",ExpressionUUID->"5105205c-e6be-4035-b8e5-e74d1f28a6c2"],
+
+Cell[TextData[{
+ "In ",
+ StyleBox["Part 2",
+  FontWeight->Bold],
+ " we feed that tensor into the heart of the transformer: scaled ",
+ "dot-product attention, derived from first principles \[LongDash] ",
+ "including the ",
+ Cell[BoxData[
+  FractionBox["1", 
+   SqrtBox[
+    SubscriptBox["d", "k"]]]], "Text",
+  FontSize->14,ExpressionUUID->"5e3b662b-faba-40f9-a2ac-95d17e0a7715"],
+ " factor that is not arbitrary, but the unique scaling that keeps the ",
+ "pre-softmax logits at unit variance. We then visualise attention ",
+ "heatmaps on real text using a pretrained GPT-2 small (accessible in ",
+ "WL via ",
+ StyleBox["NetModel[\"GPT-2 Transformer Trained on WebText Data\"]",
+  FontFamily->"Courier"],
+ ") so the reader sees real, learned attention structure before ",
+ "training their own from scratch in Part 4."
+}], "Text",ExpressionUUID->"d9cea735-9295-44e6-a66f-dad89284f269"],
+
+Cell[TextData[{
+ "The remaining parts build the transformer block (Part 3), pre-train ",
+ "with the option to scale up via ",
+ StyleBox["RemoteBatchSubmit",
+  FontFamily->"Courier"],
+ " (Part 4), implement five sampling strategies plus speculative ",
+ "decoding (Part 5), instruction-tune the model on a small SFT mixture ",
+ "(Part 6), apply GRPO-style RL on a verifiable task (Part 7), and ",
+ "finish with an interactive chat widget powered by the final ",
+ "post-trained model (Part 8). The whole series runs on a Mac mini by ",
+ "default; the cloud path is opt-in."
+}], "Text",ExpressionUUID->"e97e4cd1-afb4-45af-886d-f0cd0b1e5dac"],
+
+Cell["References", "Section",ExpressionUUID->"f0424769-5f64-4f17-8836-a5515b28c34a"],
+
+Cell["\<\
+Gage, P. (1994). A New Algorithm for Data Compression. The C Users Journal, \
+12(2).
+Sennrich, R., Haddow, B., Birch, A. (2016). Neural Machine Translation of \
+Rare Words with Subword Units. ACL.
+Vaswani, A. et al. (2017). Attention Is All You Need. NeurIPS.
+Radford, A. et al. (2019). Language Models are Unsupervised Multitask \
+Learners. (GPT-2 technical report.)
+Su, J. et al. (2021). RoFormer: Enhanced Transformer with Rotary Position \
+Embedding.
+Raschka, S. (2024). Build a Large Language Model from Scratch. Manning.
+Karpathy, A. (2015). char-rnn. github.com/karpathy/char-rnn. Tiny Shakespeare \
+lives at data/tinyshakespeare/input.txt in that repo.\
+\>", "Text",ExpressionUUID->"b8e76d47-2b31-4655-b56f-6894397e656c"]
+},
+Saveable->True,
+WindowSize->{900, 750},
+FrontEndVersion->"14.3 for Mac OS X ARM (64-bit) (July 8, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"c10e77ff-9bf2-443a-8f39-e1cd4e301a9d"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[554, 20, 153, 2, 70, "Title",ExpressionUUID->"ca5a21c0-5d94-499a-8303-b62a1d762d9c"],
+Cell[710, 24, 107, 0, 70, "Subtitle",ExpressionUUID->"4217fe81-6a09-45cd-ad98-d488fdd8840b"],
+Cell[820, 26, 837, 14, 70, "Text",ExpressionUUID->"1f44b107-44b9-4bc7-95ea-fb9a2f199b0e"],
+Cell[1660, 42, 1170, 22, 70, "Text",ExpressionUUID->"70311af9-3daf-4ceb-a2f6-75fa32b81743"],
+Cell[2833, 66, 556, 8, 70, "Text",ExpressionUUID->"ba4c04e0-2519-4cfb-9e58-3fc1159143ec"],
+Cell[3392, 76, 653, 13, 70, "Text",ExpressionUUID->"d1d85db8-d505-42d5-9f1e-34e9f7394575"],
+Cell[4048, 91, 157, 2, 70, "Input",ExpressionUUID->"d84f3537-8c8b-4348-8f89-899923ad0818"],
+Cell[4208, 95, 83, 0, 70, "Section",ExpressionUUID->"386c15fa-dbd2-4040-aa46-2b3ccb5805f2"],
+Cell[4294, 97, 824, 14, 70, "Text",ExpressionUUID->"5f11b32e-6864-4476-8a6e-af1515478706"],
+Cell[5121, 113, 105, 0, 70, "Input",ExpressionUUID->"bee097a2-1e88-43a0-bdc5-7151dde5dcb1"],
+Cell[5229, 115, 97, 0, 70, "Input",ExpressionUUID->"93ac0647-0800-4fad-a13b-fcf52c680728"],
+Cell[5329, 117, 153, 3, 70, "Input",ExpressionUUID->"637f4f48-69a8-409a-9c58-5ba60d1ffba5"],
+Cell[5485, 122, 108, 0, 70, "Section",ExpressionUUID->"3b3ed1ad-88bc-43cb-ad26-e99892613cff"],
+Cell[5596, 124, 294, 4, 70, "Text",ExpressionUUID->"8e397b24-642e-4f53-9ef7-0e130c791d95"],
+Cell[5893, 130, 910, 14, 70, "Text",ExpressionUUID->"aa2db0a0-c60e-4d76-847a-63d4e4a2c9ee"],
+Cell[6806, 146, 754, 13, 70, "Text",ExpressionUUID->"c72eea6a-33d5-43e4-8f24-73207f1ddede"],
+Cell[7563, 161, 128, 0, 70, "Input",ExpressionUUID->"0840751b-1caf-48f8-8ef7-b77cc8d1bff4"],
+Cell[7694, 163, 128, 0, 70, "Input",ExpressionUUID->"03a01d0f-1e65-4ed0-a7b5-6e97ef8bbd53"],
+Cell[7825, 165, 914, 18, 70, "Text",ExpressionUUID->"6bff9f43-3a58-483d-824c-5466195ed90b"],
+Cell[8742, 185, 123, 0, 70, "Input",ExpressionUUID->"5b9635cf-e852-43ae-8d85-498cf4567c21"],
+Cell[8868, 187, 119, 0, 70, "Section",ExpressionUUID->"2dd75ab0-7205-4c57-8ead-fc62e3aab6eb"],
+Cell[8990, 189, 683, 9, 70, "Text",ExpressionUUID->"21f7c931-8023-4735-b638-f98ebffef3de"],
+Cell[9676, 200, 99, 0, 70, "Text",ExpressionUUID->"2a96a8a2-07c2-4140-99b9-eb84f5e4239e"],
+Cell[9778, 202, 531, 14, 70, "Text",ExpressionUUID->"afa6828f-3872-4fa5-919f-6952f072ad4d"],
+Cell[10312, 218, 1307, 39, 70, "Text",ExpressionUUID->"4d1a3425-d3d4-4b28-b229-c2164fde1dfa"],
+Cell[11622, 259, 158, 2, 70, "Input",ExpressionUUID->"6d3f82bb-ae7a-4054-b92e-a75efe243631"],
+Cell[11783, 263, 116, 0, 70, "Subsection",ExpressionUUID->"635e3341-ccee-4843-968d-0f0384f686ce"],
+Cell[11902, 265, 445, 8, 70, "Text",ExpressionUUID->"a6e2a6e3-56b6-423e-b153-45a7054df187"],
+Cell[12350, 275, 219, 3, 70, "Text",ExpressionUUID->"78ff2619-a6e8-4c1b-ac30-c0be8f966d40"],
+Cell[12572, 280, 1121, 27, 70, "Text",ExpressionUUID->"46348279-cc90-40d0-bbdb-a9bff3aab9dd"],
+Cell[13696, 309, 147, 2, 70, "Input",ExpressionUUID->"3d725780-0c82-43de-9567-0afd7c7c69d5"],
+Cell[13846, 313, 105, 0, 70, "Input",ExpressionUUID->"4783721c-77ce-41b8-b0ae-7dcd5f7062e4"],
+Cell[13954, 315, 806, 18, 70, "Text",ExpressionUUID->"3000150d-64a2-467a-b6ac-b22c5f5ff795"],
+Cell[14763, 335, 668, 11, 70, "Text",ExpressionUUID->"c65e41fc-3a94-45d4-a8f4-3eddcc91575c"],
+Cell[15434, 348, 99, 0, 70, "Subsection",ExpressionUUID->"45711a13-7d10-4b20-bf0e-70fa2a5bfe50"],
+Cell[15536, 350, 877, 24, 70, "Text",ExpressionUUID->"dea5a866-f983-471c-96aa-257c9d0a53a5"],
+Cell[16416, 376, 206, 4, 70, "Input",ExpressionUUID->"7f4a4c44-512c-4770-9a2b-60eee260845b"],
+Cell[16625, 382, 905, 29, 70, "Text",ExpressionUUID->"06fdfae9-ab10-486e-92de-611302a53895"],
+Cell[17533, 413, 96, 0, 70, "Subsection",ExpressionUUID->"83e32732-e252-4700-8c8a-6ac82f2f387b"],
+Cell[17632, 415, 445, 9, 70, "Text",ExpressionUUID->"b9cd872a-8d1a-4266-a8ef-03eaeee90c17"],
+Cell[18080, 426, 174, 3, 70, "Input",ExpressionUUID->"d6d559d1-c298-44d9-aa7d-0dfe5a4f45d8"],
+Cell[18257, 431, 316, 5, 70, "Text",ExpressionUUID->"6c0b93f8-93c5-45ff-9a9e-75af50555a7c"],
+Cell[18576, 438, 342, 8, 70, "Input",ExpressionUUID->"e7249e05-0c71-4819-b3d7-e50d9772f62e"],
+Cell[18921, 448, 211, 3, 70, "Text",ExpressionUUID->"11a853a2-9595-4a8b-aa24-e9c09336cc20"],
+Cell[19135, 453, 445, 13, 70, "Input",ExpressionUUID->"e40745f1-f080-4d91-a1e2-9e95d029434d"],
+Cell[19583, 468, 495, 10, 70, "Text",ExpressionUUID->"db03485c-cf7f-4826-aaad-4c4ae9683d3c"],
+Cell[20081, 480, 115, 0, 70, "Subsection",ExpressionUUID->"5e5672ae-2a44-409d-b559-5bc4d70bff01"],
+Cell[20199, 482, 632, 13, 70, "Text",ExpressionUUID->"47aafd2e-14a6-44df-9194-a1e98dfc2cf3"],
+Cell[20834, 497, 442, 11, 70, "Input",ExpressionUUID->"e051f015-fc03-4481-9383-b3d512e67aac"],
+Cell[21279, 510, 522, 7, 70, "Text",ExpressionUUID->"4ed207d3-fd63-4e92-90b5-f0e84b39125a"],
+Cell[21804, 519, 342, 5, 70, "Text",ExpressionUUID->"56deda22-b8ed-4d7a-95d5-38713592f2c4"],
+Cell[22149, 526, 114, 0, 70, "Section",ExpressionUUID->"e219e7c2-e96e-4387-bce0-5d17bd9c2ed8"],
+Cell[22266, 528, 950, 17, 70, "Text",ExpressionUUID->"22b55a68-2d08-442d-9e01-7a0e18f5c313"],
+Cell[23219, 547, 111, 0, 70, "Input",ExpressionUUID->"a59fc121-9cf5-4392-a2d9-d96338a5fe23"],
+Cell[23333, 549, 821, 11, 70, "Text",ExpressionUUID->"37f04b72-51d5-4b79-8b99-e5ff96931e06"],
+Cell[24157, 562, 599, 8, 70, "Text",ExpressionUUID->"ad24717d-901c-4b3e-91da-57cf84f4760e"],
+Cell[24759, 572, 100, 0, 70, "Section",ExpressionUUID->"605fac3a-b223-46a2-a3f7-ecc23ac46436"],
+Cell[24862, 574, 232, 3, 70, "Text",ExpressionUUID->"c5a9705d-1aae-4c38-992d-ad0bc07ab326"],
+Cell[25097, 579, 1047, 27, 70, "Text",ExpressionUUID->"e5cd5d6f-63f8-457f-b829-533995472802"],
+Cell[26147, 608, 1155, 21, 70, "Text",ExpressionUUID->"5bb28e7a-51ed-4e30-99cf-058f2bf33673"],
+Cell[27305, 631, 646, 11, 70, "Text",ExpressionUUID->"fd714c9d-b695-4b19-aa38-78bf31644bba"],
+Cell[27954, 644, 121, 0, 70, "Text",ExpressionUUID->"d36b0c96-0d2e-4e5b-b3d5-709f727cd75e"],
+Cell[28078, 646, 288, 5, 70, "Input",ExpressionUUID->"2ead320a-698b-4df0-978d-10b8687dc48e"],
+Cell[28369, 653, 80, 0, 70, "Input",ExpressionUUID->"e765edda-89b9-4de4-a00e-87aa0e6d1b5a"],
+Cell[28452, 655, 454, 8, 70, "Text",ExpressionUUID->"46a5ff74-5d6d-4d6c-b6ac-f60654d360b7"],
+Cell[28909, 665, 191, 4, 70, "Input",ExpressionUUID->"2ba26650-4674-4d0e-b820-36ed57085c9f"],
+Cell[29103, 671, 130, 0, 70, "Input",ExpressionUUID->"da40ba52-c1d8-44f8-b859-3f3ca6361a86"],
+Cell[29236, 673, 338, 7, 70, "Text",ExpressionUUID->"9f0e3c01-d78a-41fc-b311-908a61918d04"],
+Cell[29577, 682, 117, 0, 70, "Subsection",ExpressionUUID->"30f934c2-168e-4741-9dba-0555c7aa2ed1"],
+Cell[29697, 684, 161, 2, 70, "Input",ExpressionUUID->"bc467fd0-949d-474d-9647-ac914bd9051c"],
+Cell[29861, 688, 563, 8, 70, "Text",ExpressionUUID->"30a5e3c5-14fa-4493-b0f6-330e71a6f52a"],
+Cell[30427, 698, 344, 8, 70, "Input",ExpressionUUID->"a93f1ab5-69e0-4455-aedb-4d7e4ef89480"],
+Cell[30774, 708, 102, 0, 70, "Section",ExpressionUUID->"ed04eb1f-2ba2-483d-bd70-4045402156ad"],
+Cell[30879, 710, 770, 16, 70, "Text",ExpressionUUID->"82fe53a3-65fa-4233-8f2d-7da81bee41a3"],
+Cell[31652, 728, 166, 2, 70, "Input",ExpressionUUID->"13227e15-7df6-47bc-aca9-ee4706c32dc3"],
+Cell[31821, 732, 450, 6, 70, "Text",ExpressionUUID->"5b144fb0-6422-48b2-a35c-f67b97bfb358"],
+Cell[32274, 740, 142, 2, 70, "Text",ExpressionUUID->"2c91af27-782c-498e-ab22-ed4c8ac8889b"],
+Cell[32419, 744, 121, 0, 70, "Input",ExpressionUUID->"c8227c39-6dee-4e5d-bf96-fd04a6053fde"],
+Cell[32543, 746, 847, 15, 70, "Text",ExpressionUUID->"552ce238-0d66-4599-8d3e-074a03b42f9b"],
+Cell[33393, 763, 116, 0, 70, "Input",ExpressionUUID->"32466c99-2d61-493a-8f86-f4d9a4d6f7a7"],
+Cell[33512, 765, 430, 6, 70, "Text",ExpressionUUID->"ac387b32-5275-417a-810e-bfd2c5bb2029"],
+Cell[33945, 773, 114, 0, 70, "Subsection",ExpressionUUID->"6a325a64-fde1-43be-afd0-51b8481d7b16"],
+Cell[34062, 775, 415, 6, 70, "Text",ExpressionUUID->"8fe559f9-4a74-4673-927c-3d30bb0d2471"],
+Cell[34480, 783, 1045, 23, 70, "Input",ExpressionUUID->"3566c031-f675-461d-a0c8-998a9d2d167f"],
+Cell[35528, 808, 105, 0, 70, "Section",ExpressionUUID->"ca6a06be-a96c-40d4-880b-bea28cd298c7"],
+Cell[35636, 810, 170, 3, 70, "Text",ExpressionUUID->"651f17a4-974c-409d-8a77-ca5af6c95514"],
+Cell[35809, 815, 3283, 85, 70, "Text",ExpressionUUID->"5105205c-e6be-4035-b8e5-e74d1f28a6c2"],
+Cell[39095, 902, 883, 20, 70, "Text",ExpressionUUID->"d9cea735-9295-44e6-a66f-dad89284f269"],
+Cell[39981, 924, 637, 11, 70, "Text",ExpressionUUID->"e97e4cd1-afb4-45af-886d-f0cd0b1e5dac"],
+Cell[40621, 937, 84, 0, 70, "Section",ExpressionUUID->"f0424769-5f64-4f17-8836-a5515b28c34a"],
+Cell[40708, 939, 739, 13, 70, "Text",ExpressionUUID->"b8e76d47-2b31-4655-b56f-6894397e656c"]
+}
+]
+*)
+
+(* End of internal cache information *)

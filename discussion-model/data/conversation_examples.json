@@ -1,0 +1,120 @@
+{
+  "prompts": [
+    "What is the capital of France?",
+    "Give me three tips for staying healthy.",
+    "Who wrote the play Hamlet?",
+    "Recommend a book to read.",
+    "Explain photosynthesis in two sentences.",
+    "What is the difference between machine learning and deep learning?",
+    "Name three famous physicists.",
+    "Write a haiku about autumn.",
+    "What is the boiling point of water at sea level?",
+    "How do bees make honey?",
+    "Suggest a creative use for an old smartphone.",
+    "Why is the sky blue?"
+  ],
+  "examples": [
+    {
+      "user": "What is the capital of France?",
+      "assistant": " The capital of France is Paris.",
+      "raw": " The capital of France is Paris.\n t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t",
+      "elapsed_s": 3.93,
+      "tokens": 100,
+      "tok_per_s": 25.4
+    },
+    {
+      "user": "Give me three tips for staying healthy.",
+      "assistant": " 1. Eat\u30fc\ufffdo: Eat\ufffd\u58eb\ufffd\u58eb\u306e\ufffd\" \u88cf\ufffd\u0627\ufffd\"\n2. Eat a healthy breakfast and go to the store.\n3.\n\n4.\n5.\n1.\n2.\n3.\n4.\n5.\n6.\n7.",
+      "raw": " 1. Eat\u30fc\ufffdo: Eat\ufffd\u58eb\ufffd\u58eb\u306e\ufffd\" \u88cf\ufffd\u0627\ufffd\"\n2. Eat a healthy breakfast and go to the store.\n3.\n\n4.\n5.\n1.\n2.\n3.\n4.\n5.\n6.\n7.\n t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t",
+      "elapsed_s": 2.31,
+      "tokens": 100,
+      "tok_per_s": 43.3
+    },
+    {
+      "user": "Who wrote the play Hamlet?",
+      "assistant": " Shakespeare wrote the play Ham\ufffd\u9192\ufffd\ufffd\u58eb\u306e\ufffd \u88cf\u7a76\u6975!\n\n\nThe play Hamlet by William Shakespeare\u9f8d\ufffd\n- -\n\u05d9\ufffd\n-\n\n-\n\n-\n\n-\n\n-\n\n-\n-\n\n-\n\n-\n-\n\n-\n\n-\n\n-\n-\n\n-\n\n-\n-\n-\n-\n\n-\n-\n-\n-\n-\n\n-\n-\n-\n\n-\n-",
+      "raw": " Shakespeare wrote the play Ham\ufffd\u9192\ufffd\ufffd\u58eb\u306e\ufffd \u88cf\u7a76\u6975!\n\n\nThe play Hamlet by William Shakespeare\u9f8d\ufffd\n- -\n\u05d9\ufffd\n-\n\n-\n\n-\n\n-\n\n-\n\n-\n-\n\n-\n\n-\n-\n\n-\n\n-\n\n-\n-\n\n-\n\n-\n-\n-\n-\n\n-\n-\n-\n-\n-\n\n-\n-\n-\n\n-\n-",
+      "elapsed_s": 1.86,
+      "tokens": 100,
+      "tok_per_s": 53.9
+    },
+    {
+      "user": "Recommend a book to read.",
+      "assistant": "\u306e\ufffd:\u05d9\ufffd\n\ufffd\ufffd\u6975: \u88cf\ufffd\u306e\ufffd\u306e\ufffd\u9f8d\ufffd\u306e\ufffd\u306e\ufffd\u043e\ufffd\u306e\ufffd\u043e\u041a\u9192 \u88cf\ufffd\u58eb\n\ufffd\u58eb The\u30fc\ufffd The\ufffd\ufffd\u6975 the\ufffd\ufffd\u58eb the\u306e\ufffd \"\ufffd\u58eb audio\ufffd\u9192 audio \u88cf\ufffd audio\u306e\ufffd audio\u306e\ufffd audio\u306e\ufffd \u88cf\ufffd\u0627\u0629\ufffd\u6975\u9f8d\ufffd\u30fc\ufffd\u306e\ufffd for the\ufffd\u9192\ufffd\ufffd\u58eb, the\u306e\ufffd\u05d9\ufffd, the\u306e\ufffd! \u88cf\ufffd! audio\u9f8d\ufffd\u306e\ufffd\u306e\ufffd the\u306e\u759a\u58eb\u30fc\ufffd the time\u306e\ufffd the system is notifications!!\u306e\ufffd\u306e\ufffd\u306e\ufffd\u0627\ufffd\u306e\ufffd\u043e\ufffd\u30fc\ufffd\u306e\ufffd\u05d9\ufffd\u306e\u759a\u58eb\u0627\ufffd\u043e\ufffd\u05d9\ufffd! \u88cf\u759a\u58eb\u30fc\ufffd\u306e\u5b96\ufffd\u58eb\u9f8d\ufffd\u306e\ufffd",
+      "raw": "\u306e\ufffd:\u05d9\ufffd\n\ufffd\ufffd\u6975: \u88cf\ufffd\u306e\ufffd\u306e\ufffd\u9f8d\ufffd\u306e\ufffd\u306e\ufffd\u043e\ufffd\u306e\ufffd\u043e\u041a\u9192 \u88cf\ufffd\u58eb\n\ufffd\u58eb The\u30fc\ufffd The\ufffd\ufffd\u6975 the\ufffd\ufffd\u58eb the\u306e\ufffd \"\ufffd\u58eb audio\ufffd\u9192 audio \u88cf\ufffd audio\u306e\ufffd audio\u306e\ufffd audio\u306e\ufffd \u88cf\ufffd\u0627\u0629\ufffd\u6975\u9f8d\ufffd\u30fc\ufffd\u306e\ufffd for the\ufffd\u9192\ufffd\ufffd\u58eb, the\u306e\ufffd\u05d9\ufffd, the\u306e\ufffd! \u88cf\ufffd! audio\u9f8d\ufffd\u306e\ufffd\u306e\ufffd the\u306e\u759a\u58eb\u30fc\ufffd the time\u306e\ufffd the system is notifications!!\u306e\ufffd\u306e\ufffd\u306e\ufffd\u0627\ufffd\u306e\ufffd\u043e\ufffd\u30fc\ufffd\u306e\ufffd\u05d9\ufffd\u306e\u759a\u58eb\u0627\ufffd\u043e\ufffd\u05d9\ufffd! \u88cf\u759a\u58eb\u30fc\ufffd\u306e\u5b96\ufffd\u58eb\u9f8d\ufffd\u306e\ufffd",
+      "elapsed_s": 2.27,
+      "tokens": 100,
+      "tok_per_s": 44.1
+    },
+    {
+      "user": "Explain photosynthesis in two sentences.",
+      "assistant": " Photos! is the process by\u306e\ufffd by which plants, algae, and \u88cf\ufffd",
+      "raw": " Photos! is the process by\u306e\ufffd by which plants, algae, and \u88cf\ufffd\n t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t",
+      "elapsed_s": 1.93,
+      "tokens": 100,
+      "tok_per_s": 51.9
+    },
+    {
+      "user": "What is the difference between machine learning and deep learning?",
+      "assistant": " Machine learning and deep learning are two approaches to solving problems by using algorithms. \u88cf\ufffd\nN-111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+      "raw": " Machine learning and deep learning are two approaches to solving problems by using algorithms. \u88cf\ufffd\nN-111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+      "elapsed_s": 2.04,
+      "tokens": 100,
+      "tok_per_s": 48.9
+    },
+    {
+      "user": "Name three famous physicists.",
+      "assistant": " 1. Albert Einstein\n2\u9f8d\ufffd\u58eb) Albert Einstein was a German-born\ufffd\ufffd\u6975\u0627\ufffd\n\ufffd\ufffd\u6975\nA. K. \u88cf\ufffd",
+      "raw": " 1. Albert Einstein\n2\u9f8d\ufffd\u58eb) Albert Einstein was a German-born\ufffd\ufffd\u6975\u0627\ufffd\n\ufffd\ufffd\u6975\nA. K. \u88cf\ufffd t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t",
+      "elapsed_s": 1.85,
+      "tokens": 100,
+      "tok_per_s": 53.9
+    },
+    {
+      "user": "Write a haiku about autumn.",
+      "assistant": " Autumn leaves fall\ufffd\u58eb by\nDancing \u88cf\ufffd\nThe trees fall\u05d9\ufffd",
+      "raw": " Autumn leaves fall\ufffd\u58eb by\nDancing \u88cf\ufffd\nThe trees fall\u05d9\ufffd\n t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t",
+      "elapsed_s": 1.81,
+      "tokens": 100,
+      "tok_per_s": 55.4
+    },
+    {
+      "user": "What is the boiling point of water at sea level?",
+      "assistant": " The boiling point of water at sea\ufffd\ufffd\u6975!\n\ufffd\ufffd\u6975",
+      "raw": " The boiling point of water at sea\ufffd\ufffd\u6975!\n\ufffd\ufffd\u6975\n t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t",
+      "elapsed_s": 1.82,
+      "tokens": 100,
+      "tok_per_s": 55.0
+    },
+    {
+      "user": "How do bees make honey?",
+      "assistant": " Bees produce honey by\u306e\ufffd-keeping\u306e\ufffd-keeping\u043e\ufffd-climbing\u05d9\ufffd\nThe second\u9f8d\ufffd \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \"",
+      "raw": " Bees produce honey by\u306e\ufffd-keeping\u306e\ufffd-keeping\u043e\ufffd-climbing\u05d9\ufffd\nThe second\u9f8d\ufffd \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \"",
+      "elapsed_s": 1.81,
+      "tokens": 100,
+      "tok_per_s": 55.2
+    },
+    {
+      "user": "Suggest a creative use for an old smartphone.",
+      "assistant": " One creative use for an old smartphone could be a \"toy\"\ufffd\ufffd\u58eb many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many",
+      "raw": " One creative use for an old smartphone could be a \"toy\"\ufffd\ufffd\u58eb many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many many",
+      "elapsed_s": 2.23,
+      "tokens": 100,
+      "tok_per_s": 44.9
+    },
+    {
+      "user": "Why is the sky blue?",
+      "assistant": " The sky blue is a natural color, formed by the reflection of water droplets \u88cf\ufffd \u88cf\ufffd!",
+      "raw": " The sky blue is a natural color, formed by the reflection of water droplets \u88cf\ufffd \u88cf\ufffd!\n t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t",
+      "elapsed_s": 1.83,
+      "tokens": 100,
+      "tok_per_s": 54.5
+    }
+  ],
+  "model_dir": "/Users/thiel/GitHub/LLM-A-to-Z-in-WL/discussion-model/src/../data/hf_model",
+  "device": "mps",
+  "temperature": 0.7,
+  "top_k": 40,
+  "top_p": 0.95,
+  "max_new": 100
+}
