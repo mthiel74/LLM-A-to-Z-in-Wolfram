@@ -220,21 +220,21 @@ Length[vocab]"],
     "'s ",
     StyleBox["TrainingProgressFunction", FontFamily -> "Courier"],
     " writes the current model to disk every 5 minutes.  Saved ",
-    "in our case the run we'd otherwise have lost when the 15.0 ",
-    "prerelease kernel disconnected mid-run from its license server."
+    "more than one long run for us when the kernel disconnected ",
+    "mid-run from its license server."
   }],
 
-  subsection["5.3  Wolfram version matters for long runs"],
+  subsection["5.3  Long runs and license servers"],
   text[{
     "Sustained ",
     StyleBox["NetTrain", FontFamily -> "Courier"],
-    " calls on the 15.0-prerelease wolframscript binary repeatedly ",
-    "died mid-run with ",
+    " calls can repeatedly die ",
+    "mid-run with ",
     StyleBox["\"The product exited because of a license error.\"",
             FontSlant -> Italic],
-    "  Switching to the stable 14.3 binary fixed it.  If you are on a ",
-    "prerelease version of WL, training jobs that need to run for hours ",
-    "deserve a quick sanity check on a stable version first."
+    "  A local Mathematica activation rather than a network license avoids it.  Either way, ",
+    "training jobs that need to run for hours ",
+    "deserve a quick sanity check first."
   }],
 
   section["6.  Watching the model dream up Shakespeare"],

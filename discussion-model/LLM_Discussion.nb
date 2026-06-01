@@ -902,7 +902,7 @@ Yahma. (2023). alpaca-cleaned (HuggingFace dataset, Apache 2.0).\
 Saveable->True,
 WindowSize->{1266, 919},
 WindowMargins->{{4, Automatic}, {Automatic, 4}},
-FrontEndVersion->"15.0 for Mac OS X ARM (64-bit) (October 27, 2025)",
+FrontEndVersion->"14.3 for Mac OS X ARM (64-bit) (July 8, 2025)",
 StyleDefinitions->"Default.nb",
 ExpressionUUID->"e2285e22-2fa5-4649-b5ec-99fbbd5be1f8"
 ]

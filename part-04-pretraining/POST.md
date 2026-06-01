@@ -182,14 +182,14 @@ TrainingProgressFunction ->
   {saveCheckpoint, "Interval" -> Quantity[5, "Minutes"]}
 ```
 
-**Wolfram Language version matters.** The series was developed on a
-machine that had both Wolfram 14.3 and 15.0-prerelease installed.
-Long-running `NetTrain` calls on the 15.0 prerelease repeatedly died
-mid-run with "The product exited because of a license error", inside
-sustained compute, even though short scripts succeeded. Switching the
-training to the 14.3 binary explicitly fixed it. If you are on a
-prerelease version of WL, training jobs that need to run for hours
-deserve a quick sanity check on a stable version first.
+**Use a stable, locally-activated Wolfram Language.** The series was
+developed on Wolfram 14.3. Long-running `NetTrain` calls can die
+mid-run with "The product exited because of a license error" when the
+kernel cannot keep reaching its license server, even though short
+scripts succeed. A local Mathematica activation rather than a network
+license avoids it; either way, training jobs that need to run for hours
+deserve a quick sanity check first — and the periodic checkpoints above
+so an interruption costs minutes, not hours.
 
 ## 6. Watching the model dream up Shakespeare
 
